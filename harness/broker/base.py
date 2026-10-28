@@ -13,8 +13,12 @@ class Broker(Protocol):
     def place_order(self, req: OrderRequest) -> OrderResult: ...
 
 
+class Guard(Protocol):
+    def claim(self, client_order_id: str) -> None: ...
+
+
 class IdempotencyGuard:
-    """프로세스 내 client_order_id 중복 차단. 재시작 간 보존은 P1에서 DB로 옮긴다."""
+    """프로세스 내 client_order_id 중복 차단. 재시작 간 보존은 harness.audit.SqliteIdempotencyGuard."""
 
     def __init__(self) -> None:
         self._seen: set[str] = set()

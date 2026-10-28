@@ -7,17 +7,18 @@ from harness.models import (
     AccountState, Market, OrderRequest, OrderResult, OrderStatus, OrderType, Position, Side,
 )
 
-from .base import IdempotencyGuard
+from .base import Guard, IdempotencyGuard
 
 
 class PaperBroker:
-    def __init__(self, cash_krw: Decimal, fee_pct: dict[Market, Decimal] | None = None):
+    def __init__(self, cash_krw: Decimal, fee_pct: dict[Market, Decimal] | None = None,
+                 guard: Guard | None = None):
         self.cash_krw = cash_krw
         self.fee_pct = fee_pct or {Market.KR: Decimal("0.015"), Market.US: Decimal("0.09")}
         self._prices: dict[tuple[Market, str], Decimal] = {}
         self._fx: dict[Market, Decimal] = {Market.KR: Decimal(1), Market.US: Decimal(1400)}
         self._pos: dict[tuple[Market, str], tuple[int, Decimal]] = {}
-        self._guard = IdempotencyGuard()
+        self._guard = guard or IdempotencyGuard()
 
     def set_price(self, market: Market, symbol: str, price: Decimal) -> None:
         self._prices[(market, symbol)] = price

@@ -1,0 +1,7 @@
+# P1: 사람이 작성하는 매매 논지. 이 파일을 config/theses.yaml 로 복사해 사용.
+- market: KR
+  symbol: "005930"
+  direction: LONG
+  rationale: "예시 — 실제 근거로 교체하세요"
+  valid_from: "2026-10-29T08:00:00+09:00"
+  valid_until: "2026-10-29T15:30:00+09:00"

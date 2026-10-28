@@ -1,0 +1,4 @@
+# 실시간 체결가(mc) 푸시 본문 필드명. scripts/capture_feed.py 결과를 보고 채운다.
+# 비어 있으면 scripts/run_mock.py 가 시작을 거부한다.
+price_field: null
+volume_field: null   # 체결 1건의 수량(누적거래량 아님)

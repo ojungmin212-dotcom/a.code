@@ -19,7 +19,7 @@ from typing import Any
 
 from harness.models import Market, OrderRequest, OrderResult, OrderStatus, OrderType, Side
 
-from .base import IdempotencyGuard
+from .base import Guard, IdempotencyGuard
 
 LIVE_ENV_VAR = "HARNESS_ALLOW_LIVE"
 LIVE_ENV_VALUE = "I_ACCEPT_REAL_MONEY"
@@ -39,7 +39,8 @@ class NHPlugBroker:
     def __init__(self, account_no: str, *, dry_run: bool = True, allow_live: bool = False,
                  order_no_field: str | None = None,
                  call: Callable[..., Any] | None = None,
-                 base_url: Callable[[], str] | None = None):
+                 base_url: Callable[[], str] | None = None,
+                 guard: Guard | None = None):
         if not account_no:
             raise ValueError("account_no 가 필요합니다")
         if call is None or base_url is None:
@@ -52,7 +53,7 @@ class NHPlugBroker:
         self.order_no_field = order_no_field
         self._call = call
         self._base_url = base_url
-        self._guard = IdempotencyGuard()
+        self._guard = guard or IdempotencyGuard()
         self._assert_environment()
 
     # ------------------------------------------------------------------ 환경 가드

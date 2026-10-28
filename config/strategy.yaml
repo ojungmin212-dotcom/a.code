@@ -1,0 +1,14 @@
+# 의사결정 계층 설정. 임계값은 모의투자 결과로 조정한다(현재 값은 근거 없는 초기값).
+version: signal_v1
+min_bars: 20                 # 이만큼 1분봉이 쌓이기 전에는 판단하지 않음
+stop_atr_mult: 2.0           # 손절 = 진입가 - ATR14 x 2
+reward_risk: 2.5             # 익절 = 진입가 + (진입가 - 손절) x 2.5
+jev:
+  model: jev-1.13.0          # 별칭(jev-latest) 대신 버전 고정 — 임계값을 이 버전에 맞춤
+  timeout_sec: 3.0
+  min_thesis_alignment: 0.60 # noul 확률
+  min_momentum_score: 2.5    # score 0~4
+  max_volatile_prob: 0.30    # choice 'volatile' 확률
+baseline:
+  min_volume_ratio: 1.2
+  confidence: 0.70           # 리스크 게이트 통과용 고정값
