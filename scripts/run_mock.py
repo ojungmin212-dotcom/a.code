@@ -3,6 +3,7 @@
     python scripts/run_mock.py config/theses.yaml                    # 판단·로그만
     python scripts/run_mock.py config/theses.yaml --send             # 모의투자 주문 전송
     python scripts/run_mock.py config/theses.yaml --policy baseline  # 비교군
+    python scripts/run_mock.py data/theses.sqlite                    # P2: Grok 논지(run_research.py 가 작성)
 """
 from __future__ import annotations
 
@@ -27,6 +28,8 @@ from harness.market.bars import BarAggregator  # noqa: E402
 from harness.market.nh_feed import FeedFields, NHTickFeed  # noqa: E402
 from harness.models import Market  # noqa: E402
 from harness.research import ThesisStore  # noqa: E402
+from harness.research.repo import ThesisRepo  # noqa: E402
+from harness.research.service import ResearchConfig  # noqa: E402
 from harness.risk import SESSIONS, Ledger, RiskGate, RiskLimits  # noqa: E402
 
 
@@ -44,7 +47,8 @@ def main() -> None:
 
     limits = RiskLimits.from_yaml(ROOT / "config" / "risk.yaml")
     cfg = StrategyConfig.from_yaml(ROOT / "config" / "strategy.yaml")
-    theses = ThesisStore.from_yaml(a.theses_yaml)
+    repo = ThesisRepo(a.theses_yaml) if a.theses_yaml.endswith(".sqlite") else None
+    theses = repo.store() if repo else ThesisStore.from_yaml(a.theses_yaml)
     audit = AuditLog(ROOT / "data" / f"audit-{a.policy}.sqlite")
     broker = NHPlugBroker(os.environ.get("NHPLUG_DEFAULT_ACCOUNT", ""), dry_run=not a.send,
                           order_no_field=a.order_no_field, guard=audit.guard())
@@ -59,7 +63,11 @@ def main() -> None:
     engine = TradingEngine(gate=gate, broker=broker, policy=policy,
                            theses=theses, min_bars=cfg.min_bars, audit=audit)
 
-    symbols = [s for m, s in theses.watchlist(datetime.now(timezone.utc)) if m is Market.KR]
+    if repo:  # 논지가 장중에 생기거나 사라지므로 후보 종목 전체를 구독
+        rcfg = ResearchConfig.from_yaml(ROOT / "config" / "research.yaml")
+        symbols = [u.symbol for u in rcfg.universe if u.market is Market.KR]
+    else:
+        symbols = [s for m, s in theses.watchlist(datetime.now(timezone.utc)) if m is Market.KR]
     if not symbols:
         sys.exit("지금 유효한 국내 Thesis 가 없습니다.")
     fields = FeedFields(feed_cfg["price_field"], feed_cfg["volume_field"])
@@ -67,8 +75,12 @@ def main() -> None:
     feed = None
     print(f"정책={policy.name} 전송={'모의' if a.send else 'dry_run'} 종목={symbols}")
 
+    last_reload = datetime.now(timezone.utc)
     while True:
         now = datetime.now(timezone.utc)
+        if repo and (now - last_reload).total_seconds() >= 60:
+            engine.theses = repo.store()
+            last_reload = now
         kr = SESSIONS[Market.KR]
         if not kr.is_open(now):
             engine.flatten_if_due(now)

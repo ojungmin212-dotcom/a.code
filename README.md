@@ -42,6 +42,25 @@ python scripts/run_mock.py config/theses.yaml --send --order-no-field <필드명
 python scripts/run_mock.py config/theses.yaml --policy baseline                  # 비교군 (별도 프로세스)
 ```
 
+## P2 구성 (Grok 리서치 루프 + 평가)
+
+| 모듈 | 내용 |
+|---|---|
+| `harness/research/grok.py` | xAI Responses API 클라이언트 (web_search·x_search 도구 + JSON 스키마 출력) |
+| `harness/research/bots.py` | 감성(X·뉴스) / 펀더멘털 / 반대논리 봇 |
+| `harness/research/aggregate.py` | 코드 결합: AVOID·반대논리 거부권, 가중 점수, 논지 유효시간(장 마감 넘지 않음) |
+| `harness/research/budget.py` | 월 예산 상한 — 초과 시 리서치 중단 → 논지 없음 → 매매 없음 |
+| `harness/research/repo.py` | 논지 공유 저장소 — Jev·비교군 프로세스가 같은 논지를 읽음 |
+| `harness/evaluation.py` | 승률·손익비·최대낙폭, Jev 확률 보정(Brier) |
+
+```bash
+python scripts/grok_ping.py                       # Grok 연결·응답 형식 점검(검색 없음, 저비용)
+python scripts/run_research.py                    # 리서치 상주(장 전 1회 + 선택적 장중 갱신)
+python scripts/run_mock.py data/theses.sqlite                       # Jev 정책
+python scripts/run_mock.py data/theses.sqlite --policy baseline     # 비교군
+python scripts/report.py data/audit-jev.sqlite data/audit-baseline.sqlite
+```
+
 ## 알려진 한계
 - 주문번호 응답 필드명 미확인 → 확인 전까지 모든 실제 전송은 `UNKNOWN` 처리
 - 잔고 응답 파싱 미구현 (원본만 조회)
@@ -51,4 +70,6 @@ python scripts/run_mock.py config/theses.yaml --policy baseline                 
 - 체결통보(d2) 미연동 → 실제 전송 주문은 전부 '대조 필요'로 묶이고 사람이 확인해야 다음 주문 가능
 - 봉 시각은 수신 시각 기준, 거래 없는 분은 봉이 생기지 않음
 - 리플레이 청산은 봉 종가 체결로 근사 (갭·슬리피지 무시)
+- Grok 요청·응답 형식과 모델명(grok-4.7)은 공식 문서를 직접 확인하지 못함 → `grok_ping.py` 로 확인 필요
+- 리서치 비용: 2종목 장 전 1회 추정 약 900원 → 월 1만원 예산으로는 약 11거래일분
 - Jev 시장 장세 질문은 지수가 아닌 해당 종목 봉으로 판단 (지수 피드 미연동)

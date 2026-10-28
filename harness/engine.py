@@ -69,6 +69,9 @@ class TradingEngine:
         key = (bar.market, bar.symbol)
         hist = self._bars.setdefault(key, deque(maxlen=self._history))
         hist.append(bar)
+        self.audit.record("bar", {"start": bar.start, "o": bar.open, "h": bar.high, "l": bar.low,
+                                  "c": bar.close, "v": bar.volume},
+                          market=bar.market.value, symbol=bar.symbol, ts=now)
         if key in self.positions:
             self.positions[key].last = bar.close
 

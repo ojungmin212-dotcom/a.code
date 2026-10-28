@@ -1,0 +1,22 @@
+# Grok 리서치 루프 (느린 루프). docs/harness-design.md §2
+# ⚠️ 모델명·요청 형식은 공식 문서(docs.x.ai)를 이 환경에서 직접 열지 못해 검색 결과 기준이다.
+#    scripts/grok_ping.py 로 먼저 확인할 것.
+model: grok-4.7
+timeout_sec: 120
+# 후보 종목: Grok 이 종목을 '고르지' 않는다(없는 종목코드 환각 방지). 여기 적힌 종목만 평가.
+universe:
+  - {market: KR, symbol: "005930", name: "삼성전자"}
+  - {market: KR, symbol: "000660", name: "SK하이닉스"}
+thesis_ttl_min: 180          # 논지 유효시간(장 마감을 넘지 않음)
+refresh_min: null            # null = 장 전 1회만. 숫자면 장중 N분마다 갱신(비용 급증 주의)
+# 예산: 월 상한 초과 시 리서치 중단 → 논지 없음 → 매매 없음(안전한 실패)
+monthly_budget_krw: 10000
+usd_krw: 1400
+# 호출당 추정 비용(USD). 실측(usage)이 더 크면 실측을 쓴다. X 검색은 받은 게시물 수로 과금($5/1천 게시물).
+est_cost_usd: {sentiment: 0.20, fundamental: 0.10, bear: 0.02}
+token_price_usd_per_m: {input: 3.0, output: 15.0}   # 확인 필요 — 모델별로 다름
+aggregate:
+  weights: {sentiment: 0.4, fundamental: 0.6}
+  min_score: 0.45            # 가중 점수 하한
+  avoid_veto_conf: 0.6       # 어느 봇이든 AVOID 신뢰도 이상이면 거부
+  bear_veto_prob: 0.5        # 반대논리봇의 '논지 무효화 위험' 확률 이상이면 거부
