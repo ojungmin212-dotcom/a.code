@@ -81,6 +81,12 @@ class TradingEngine:
         self.audit.record("pending_resolved", {"note": note, "result": po.result if po else None},
                           market=market.value, symbol=symbol)
 
+    def set_fx(self, rates: dict[Market, Decimal], now: datetime) -> None:
+        """환율 갱신. 빠진 시장은 신규 진입 중단(보유 포지션은 마지막 환율로 관리)."""
+        for m in set(self.fx) - set(rates) - {Market.KR}:
+            self.audit.record("fx_unavailable", {"market": m.value}, ts=now)
+        self.fx = {Market.KR: Decimal(1), **rates}
+
     # ------------------------------------------------------------------ 메인 루프
     def on_bar(self, bar: Bar, now: datetime) -> None:
         key = (bar.market, bar.symbol)
@@ -143,7 +149,8 @@ class TradingEngine:
     def _book_exit(self, key: Key, qty: int, price: Decimal, reason: str, now: datetime,
                    estimated: bool = False) -> None:
         p = self.positions[key]
-        proceeds = price * qty * p.fx
+        exit_fx = self.fx.get(key[0], p.fx)  # 미국: 매도 시점 환율로 환산(환차손익 포함)
+        proceeds = price * qty * exit_fx
         cost = p.avg_price * qty * p.fx
         fee = cost * Decimal(str(self.gate.limits.round_trip_cost_pct[key[0]])) / 100
         pnl = proceeds - cost - fee
@@ -165,6 +172,8 @@ class TradingEngine:
         thesis = self.theses.active(market, symbol, now)
         if thesis is None or len(bars) < self.min_bars or self.gate.should_flatten(market, now):
             return
+        if market not in self.fx:
+            return  # 환율 없음/낡음 → 이 시장 신규 진입 금지
 
         ctx = DecisionContext(market=market, symbol=symbol, now=now, thesis=thesis, bars=bars,
                               indicators=compute_indicators(bars), fx_rate_krw=self.fx[market])

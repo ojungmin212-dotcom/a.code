@@ -78,11 +78,28 @@ touch data/KILL                                   # 긴급 정지(신규 진입 
 python scripts/resume.py data/audit-live.sqlite "정지 원인과 조치 내용"
 ```
 
+## P4 구성 (국내 + 미국, 50만원)
+
+| 모듈 | 내용 |
+|---|---|
+| `harness/broker/nhplug_broker.py` | 미국 매수·매도·잔고 — **매도 경로 미설정 시 미국 주문 전체 비활성** |
+| `harness/market/instruments.py` | 티커 → GIC 15자리(해외 실시간 구독키), NH 종목마스터 사용 |
+| `harness/market/fx.py` | USD/KRW 수동 설정 + 신선도 검사(기본 3일) — 낡으면 미국 신규 진입 중단 |
+| `harness/runner.py` | 한 프로세스가 국내·미국 정규장을 번갈아 운영(손실 장부 공유), 두 시장이면 상주 |
+| `harness/promotion.py` `evaluate_p4` | 국내 실거래 4주·20회·슬리피지 중앙값 30bp 이하·정지 0회 + 미국 모의 4주·30회·손익>0 |
+
+```bash
+python scripts/capture_feed.py AAPL --us                          # 미국 장중: RC 푸시 필드 확인
+python scripts/run_mock.py data/theses.sqlite --send --markets KR,US   # 미국 포함 모의 운영(상주)
+python scripts/run_live.py data/theses.sqlite --p4                # P3·P4 심사 통과 시에만
+```
+
 ## 알려진 한계
 - 주문번호 응답 필드명 미확인 → 확인 전까지 모든 실제 전송은 `UNKNOWN` 처리
 - 잔고 응답 파싱 미구현 (원본만 조회)
 - 미국 주식 주문 미지원 (해외 매도 경로 미검증)
-- 휴장일·조기폐장 미반영
+- 휴장일·조기폐장 미반영 (미국 추수감사절 다음날 등 조기폐장일에 마감 청산이 늦을 수 있음)
+- 미국: 매도 경로·잔고 필드·RC 푸시 필드 미확인, 소수점 주문 미지원(25만원 한도로 1주가 비싼 종목은 거래 불가), 환율 수동 갱신
 - 실시간 체결가 푸시의 가격·수량 필드명 미확인 → `config/feed.yaml` 이 비어 있으면 `run_mock.py` 가 시작을 거부
 - 체결 확인은 잔고 대조 방식(5초 주기) — 잔고에는 체결가가 없어 매도 손익은 직전 시세로 추정. 체결통보(d2) 미연동
 - 주문 취소 API 미구현 → 진입·청산 모두 시장가 주문 사용(지정가 미체결 잔류 위험 회피, 대신 슬리피지 감수)

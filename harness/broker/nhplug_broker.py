@@ -8,8 +8,8 @@
    응답 Output_0 에서 주문번호 필드(order_no_field)를 확인해야만 ACCEPTED. 그 외는 UNKNOWN.
    ⚠️ 주문번호 필드명은 아직 확인하지 못했다 → 모의투자 첫 주문 응답(scripts/mock_smoke.py)으로 확정할 것.
 4. **UNKNOWN·네트워크 오류는 자동 재시도하지 않는다.** 이미 접수됐을 수 있어 중복 주문이 된다.
-5. **미국 주식 주문 미지원(P0).** SDK 샘플에 해외 매도 경로가 없어 청산 경로가 검증되지 않았다.
-   청산 못 하는 포지션을 여는 것을 막기 위해 의도적으로 막았다.
+5. **미국 주식은 매도 경로(us.sell_path)가 설정돼야만 매수도 허용.** SDK 샘플에 해외 매도 경로가 없어
+   모의투자로 확인해 config/broker_fields.yaml 에 넣어야 한다. 청산 못 하는 포지션을 여는 것을 막는다.
 """
 from __future__ import annotations
 
@@ -45,6 +45,13 @@ class BalanceFields:
     avg_price_field: str
 
 
+@dataclass(frozen=True)
+class UsConfig:
+    sell_path: str                      # 미확인 — 모의투자로 검증 후 설정
+    balance_fields: BalanceFields | None = None
+    nation_code: str = "200"            # 200 = 미국
+
+
 def _num(v: Any) -> Decimal:
     return Decimal(str(v).replace(",", "").strip() or "0")
 
@@ -59,7 +66,8 @@ class NHPlugBroker:
                  call: Callable[..., Any] | None = None,
                  base_url: Callable[[], str] | None = None,
                  guard: Guard | None = None,
-                 balance_fields: BalanceFields | None = None):
+                 balance_fields: BalanceFields | None = None,
+                 us: UsConfig | None = None):
         if not account_no:
             raise ValueError("account_no 가 필요합니다")
         if call is None or base_url is None:
@@ -74,6 +82,7 @@ class NHPlugBroker:
         self._base_url = base_url
         self._guard = guard or IdempotencyGuard()
         self.balance_fields = balance_fields
+        self.us = us
         self._assert_environment()
 
     # ------------------------------------------------------------------ 환경 가드
@@ -92,8 +101,8 @@ class NHPlugBroker:
 
     # ------------------------------------------------------------------ 주문
     def build_payload(self, req: OrderRequest) -> tuple[str, dict]:
-        if req.market is not Market.KR:
-            raise NotImplementedError("P0 는 국내주식만 지원합니다(미국 매도 경로 미검증)")
+        if req.market is Market.US:
+            return self._build_us(req)
         is_market = req.order_type is OrderType.MARKET
         input_0: dict[str, Any] = {
             "act_no": self.account_no,
@@ -110,6 +119,23 @@ class NHPlugBroker:
                 raise ValueError("국내주식 지정가는 원 단위 정수여야 합니다")
             input_0["orr_pr"] = int(req.limit_price)
         return _KR_PATHS[req.side], input_0
+
+    def _build_us(self, req: OrderRequest) -> tuple[str, dict]:
+        if self.us is None:
+            raise NotImplementedError("미국 매도 경로 미설정 → 미국 주문 비활성 (config/broker_fields.yaml us.sell_path)")
+        is_market = req.order_type is OrderType.MARKET
+        input_0: dict[str, Any] = {
+            "act_no": self.account_no,
+            "fc_sec_trd_nat_cd": self.us.nation_code,
+            "iem_cd": req.symbol,                              # 티커(AAPL)
+            "orr_qty": req.quantity,
+            "ahi_nmn_pr_tp_cd": "03" if is_market else "00",   # 03 시장가 / 00 지정가
+            "wtm_cur_knd_cd": "2",                             # 2 = 원화(통합증거금)
+        }
+        if not is_market:
+            input_0["fc_orr_uit_pr"] = float(req.limit_price.quantize(Decimal("0.01")))
+        path = "/gbstock/order/v1/buy" if req.side is Side.BUY else self.us.sell_path
+        return path, input_0
 
     def place_order(self, req: OrderRequest) -> OrderResult:
         path, input_0 = self.build_payload(req)   # 지원하지 않는 주문은 id 를 소모하기 전에 실패
@@ -158,14 +184,18 @@ class NHPlugBroker:
             "aet_bse": "2", "qut_dit_cd": "UNT", "aly_qut_cd": "1",
         })
 
-    def holdings(self) -> dict[tuple[Market, str], tuple[int, Decimal]]:
-        """국내 보유 잔고 → {(KR, 종목): (수량, 평균단가)}. 형식이 기대와 다르면 예외(조용히 0 으로 보지 않음)."""
-        f = self.balance_fields
-        if f is None:
-            raise NotConfigured("config/broker_fields.yaml 의 잔고 필드명이 비어 있습니다")
-        data = self.raw_kr_balance()
+    def raw_us_balance(self) -> dict:
+        nat = self.us.nation_code if self.us else "200"
+        return self._call("/gbstock/inquiry/v1/balance", {
+            "act_no": self.account_no, "qut_iqr_dit_cd": "9", "fc_sec_trd_nat_cd": nat,
+            "cur_cd": "USD", "xns_dit_cd": "1",
+        })
+
+    @staticmethod
+    def _parse_holdings(data: Any, f: BalanceFields, market: Market) -> dict[tuple[Market, str], tuple[int, Decimal]]:
         if not isinstance(data, dict) or f.holdings_list not in data:
-            raise RuntimeError(f"잔고 응답에 {f.holdings_list} 없음: rsp_msg={data.get('rsp_msg') if isinstance(data, dict) else data}")
+            msg = data.get("rsp_msg") if isinstance(data, dict) else data
+            raise RuntimeError(f"{market} 잔고 응답에 {f.holdings_list} 없음: rsp_msg={msg}")
         rows = data[f.holdings_list] or []
         rows = rows if isinstance(rows, list) else [rows]
         out: dict[tuple[Market, str], tuple[int, Decimal]] = {}
@@ -173,5 +203,17 @@ class NHPlugBroker:
             sym = str(r[f.symbol_field]).strip()
             qty = int(_num(r[f.quantity_field]))
             if sym and qty > 0:
-                out[(Market.KR, sym)] = (qty, _num(r[f.avg_price_field]))
+                out[(market, sym)] = (qty, _num(r[f.avg_price_field]))
+        return out
+
+    def holdings(self) -> dict[tuple[Market, str], tuple[int, Decimal]]:
+        """보유 잔고 → {(시장, 종목): (수량, 평균단가)}. 형식이 기대와 다르면 예외(조용히 0 으로 보지 않음).
+
+        미국 잔고 필드가 설정돼 있으면 함께 조회한다. 평균단가는 현지 통화 기준.
+        """
+        if self.balance_fields is None:
+            raise NotConfigured("config/broker_fields.yaml 의 잔고 필드명이 비어 있습니다")
+        out = self._parse_holdings(self.raw_kr_balance(), self.balance_fields, Market.KR)
+        if self.us and self.us.balance_fields:
+            out.update(self._parse_holdings(self.raw_us_balance(), self.us.balance_fields, Market.US))
         return out

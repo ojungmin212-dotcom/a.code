@@ -51,10 +51,11 @@ class ResearchService:
         self.cfg, self.client, self.repo, self.audit = cfg, client, repo, audit
         self.budget = BudgetGuard(audit, cfg.monthly_budget_krw, cfg.usd_krw)
 
-    def run(self, now: datetime) -> dict[str, str]:
+    def run(self, now: datetime, market: Market | None = None) -> dict[str, str]:
         results = {}
         for item in self.cfg.universe:
-            results[item.symbol] = self._one(item, now)
+            if market is None or item.market is market:
+                results[item.symbol] = self._one(item, now)
         return results
 
     def _one(self, item: UniverseItem, now: datetime) -> str:

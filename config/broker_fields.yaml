@@ -5,3 +5,11 @@ holdings_list: null       # 보유종목 목록이 들어 있는 키 (예: Outpu
 symbol_field: null        # 종목코드
 quantity_field: null      # 보유수량
 avg_price_field: null     # 평균매입단가
+
+# 미국(P4). sell_path 가 비어 있으면 미국 주문 전체 비활성(매수 포함).
+us:
+  sell_path: null         # 해외 매도 주문 경로 — SDK 샘플에 없음. 포털 명세/모의투자로 확인
+  holdings_list: Output_1 # SDK 샘플 docstring 기준(보유종목 배열)
+  symbol_field: null
+  quantity_field: null
+  avg_price_field: null

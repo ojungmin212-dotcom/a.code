@@ -1,7 +1,7 @@
 """Grok 리서치 루프(별도 프로세스). 논지를 data/theses.sqlite 에 쓰고 매매 프로세스들이 읽는다.
 
     python scripts/run_research.py --once     # 지금 1회
-    python scripts/run_research.py            # 장 전 08:00 1회 + (refresh_min 설정 시) 장중 갱신
+    python scripts/run_research.py            # 시장별 개장 60분 전 1회 + (refresh_min 설정 시) 장중 갱신
 """
 from __future__ import annotations
 
@@ -37,29 +37,31 @@ def main() -> None:
     if per_run * 22 > cfg.monthly_budget_krw:  # 장 전 1회 x 월 22거래일만 해도
         print(f"⚠️ 장 전 1회만 돌려도 월 {per_run * 22:,.0f}원 → 예산 소진 후 리서치가 멈추고 매매도 멈춥니다.")
 
-    def run() -> None:
+    def run(market: Market | None = None) -> None:
         now = datetime.now(timezone.utc)
-        for sym, r in svc.run(now).items():
+        for sym, r in svc.run(now, market).items():
             print(f"{now:%H:%M} {sym}: {r}")
 
     if a.once:
         run()
         return
 
-    kr = SESSIONS[Market.KR]
-    last: datetime | None = None
+    markets = sorted({u.market for u in cfg.universe})
+    last: dict[Market, datetime] = {}
     while True:
         now = datetime.now(timezone.utc)
-        local = kr.local(now)
-        if not kr.is_weekday(now) or kr.minutes_to_close(now) < 0:
-            time.sleep(60)
-            continue
-        first_today = local.hour >= 8 and (last is None or kr.local(last).date() != local.date())
-        refresh = (cfg.refresh_min is not None and last is not None and kr.is_open(now)
-                   and now - last >= timedelta(minutes=cfg.refresh_min))
-        if first_today or refresh:
-            run()
-            last = now
+        for m in markets:
+            s = SESSIONS[m]
+            if not s.is_weekday(now) or s.minutes_to_close(now) < 0:
+                continue
+            prev = last.get(m)
+            first_today = s.minutes_since_open(now) >= -60 and (
+                prev is None or s.trading_date(prev) != s.trading_date(now))
+            refresh = (cfg.refresh_min is not None and prev is not None and s.is_open(now)
+                       and now - prev >= timedelta(minutes=cfg.refresh_min))
+            if first_today or refresh:
+                run(m)
+                last[m] = now
         time.sleep(30)
 
 if __name__ == "__main__":

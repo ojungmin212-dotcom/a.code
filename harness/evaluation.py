@@ -32,8 +32,9 @@ class Calibration:
     bins: list[tuple[str, int, float]] = field(default_factory=list)  # (구간, 표본수, 실제 적중률)
 
 
-def trade_stats(audit: AuditLog) -> TradeStats:
-    pnls = [float(Decimal(e["payload"]["pnl_krw"])) for e in audit.events("exit")]
+def trade_stats(audit: AuditLog, market: str | None = None) -> TradeStats:
+    pnls = [float(Decimal(e["payload"]["pnl_krw"])) for e in audit.events("exit")
+            if market is None or e["market"] == market]
     wins = [p for p in pnls if p > 0]
     losses = [-p for p in pnls if p < 0]
     peak = cum = mdd = 0.0

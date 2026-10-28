@@ -7,6 +7,8 @@ timeout_sec: 120
 # 월 1만원 예산 기준 1종목(장 전 1회 추정 약 450원 x 22거래일 ≈ 9,900원). 늘리면 예산도 같이 올릴 것.
 universe:
   - {market: KR, symbol: "005930", name: "삼성전자"}
+  # P4 미국 추가 시 1종목당 월 약 9,900원 추가 → monthly_budget_krw 도 함께 올릴 것
+  # - {market: US, symbol: "AAPL", name: "Apple"}
 thesis_ttl_min: 180          # 논지 유효시간(장 마감을 넘지 않음)
 refresh_min: null            # null = 장 전 1회만. 숫자면 장중 N분마다 갱신(비용 급증 주의)
 # 예산: 월 상한 초과 시 리서치 중단 → 논지 없음 → 매매 없음(안전한 실패)

@@ -4,14 +4,17 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
 
 from harness.audit import AuditLog
-from harness.broker.nhplug_broker import BalanceFields, NHPlugBroker
+from harness.broker.nhplug_broker import BalanceFields, NHPlugBroker, UsConfig
 from harness.decision import BaselinePolicy, JevClient, JevPolicy, StrategyConfig
 from harness.engine import TradingEngine, restore_ledger, unreconciled_symbols
+from harness.market.fx import FxRate, FxStale
+from harness.market.instruments import gic_map
 from harness.market.nh_feed import FeedFields
 from harness.models import Market, OrderType
 from harness.notify import make_notifier
@@ -19,9 +22,10 @@ from harness.research import ThesisStore
 from harness.research.repo import ThesisRepo
 from harness.research.service import ResearchConfig
 from harness.risk import Ledger, RiskGate, RiskLimits
-from harness.runner import LoopConfig
+from harness.runner import LoopConfig, MarketSpec
 
 ROOT = Path(__file__).resolve().parent.parent
+_BAL_KEYS = ("holdings_list", "symbol_field", "quantity_field", "avg_price_field")
 
 
 class StartupBlocked(RuntimeError):
@@ -32,21 +36,41 @@ def load_yaml(name: str) -> dict:
     return yaml.safe_load((ROOT / "config" / name).read_text(encoding="utf-8")) or {}
 
 
-def feed_fields() -> FeedFields | None:
+def feed_fields(market: Market = Market.KR) -> FeedFields | None:
     f = load_yaml("feed.yaml")
-    return FeedFields(f["price_field"], f["volume_field"]) if f.get("price_field") and f.get("volume_field") else None
+    pre = "" if market is Market.KR else "us_"
+    price, vol = f.get(f"{pre}price_field"), f.get(f"{pre}volume_field")
+    return FeedFields(price, vol) if price and vol else None
+
+
+def _balance(d: dict) -> BalanceFields | None:
+    return BalanceFields(**{k: d[k] for k in _BAL_KEYS}) if all(d.get(k) for k in _BAL_KEYS) else None
 
 
 def broker_fields() -> tuple[str | None, BalanceFields | None]:
     f = load_yaml("broker_fields.yaml")
-    keys = ("holdings_list", "symbol_field", "quantity_field", "avg_price_field")
-    bf = BalanceFields(**{k: f[k] for k in keys}) if all(f.get(k) for k in keys) else None
-    return f.get("order_no_field"), bf
+    return f.get("order_no_field"), _balance(f)
 
 
-def fields_ready() -> bool:
+def us_config() -> UsConfig | None:
+    us = load_yaml("broker_fields.yaml").get("us") or {}
+    return UsConfig(us["sell_path"], _balance(us)) if us.get("sell_path") else None
+
+
+def fields_ready(markets: tuple[Market, ...] = (Market.KR,)) -> bool:
     order_no, bf = broker_fields()
-    return bool(order_no and bf and feed_fields())
+    ok = bool(order_no and bf and feed_fields(Market.KR))
+    if Market.US in markets:
+        us = us_config()
+        ok = ok and bool(us and us.balance_fields and feed_fields(Market.US))
+    return ok
+
+
+def fx_source(now: datetime) -> dict[Market, Decimal]:
+    try:
+        return {Market.US: FxRate.from_dict(load_yaml("fx.yaml")).check(now)}
+    except FxStale:
+        return {}
 
 
 @dataclass
@@ -57,41 +81,55 @@ class Assembly:
 
 
 def assemble(*, mode: str, theses_path: str, policy_name: str, risk_file: str, send: bool,
-             audit_name: str, entry_order_type: OrderType, allow_live: bool = False) -> Assembly:
-    fields = feed_fields()
-    if fields is None:
-        raise StartupBlocked("config/feed.yaml 의 price_field / volume_field 를 먼저 채우세요 (scripts/capture_feed.py)")
+             audit_name: str, entry_order_type: OrderType, markets: tuple[Market, ...] = (Market.KR,),
+             allow_live: bool = False) -> Assembly:
     order_no, bfields = broker_fields()
+    us = us_config() if Market.US in markets else None
+    if Market.US in markets:
+        if us is None:
+            raise StartupBlocked("미국 매도 경로(us.sell_path) 미설정 — 미국 운영 불가")
+        try:
+            FxRate.from_dict(load_yaml("fx.yaml")).check(datetime.now(timezone.utc))
+        except FxStale as e:
+            raise StartupBlocked(f"환율: {e}") from e
 
     limits = RiskLimits.from_yaml(ROOT / "config" / risk_file)
     cfg = StrategyConfig.from_yaml(ROOT / "config" / "strategy.yaml")
     repo = ThesisRepo(theses_path) if theses_path.endswith(".sqlite") else None
     theses = repo.store() if repo else ThesisStore.from_yaml(theses_path)
     audit = AuditLog(ROOT / "data" / audit_name)
-    notify = make_notifier(f"{mode}/{policy_name}")
 
     left = unreconciled_symbols(audit)
     if left:
         raise StartupBlocked(f"이전 실행의 미청산/결과불명: {left}. 브로커 화면 확인 후 "
                              "scripts/resolve_pending.py 로 기록하고 다시 시작하세요.")
 
+    specs = []
+    for m in markets:
+        fields = feed_fields(m)
+        if fields is None:
+            raise StartupBlocked(f"config/feed.yaml 의 {m} 시세 필드를 먼저 채우세요 (scripts/capture_feed.py)")
+        if repo:
+            symbols = [u.symbol for u in ResearchConfig.from_yaml(ROOT / "config" / "research.yaml").universe
+                       if u.market is m]
+        else:
+            symbols = [s for mk, s in theses.watchlist(datetime.now(timezone.utc)) if mk is m]
+        if not symbols:
+            raise StartupBlocked(f"{m} 매매 대상 종목이 없습니다")
+        keys = gic_map(symbols) if m is Market.US else {}
+        specs.append(MarketSpec(m, symbols, fields, "RC" if m is Market.US else "mc", keys))
+
     broker = NHPlugBroker(os.environ.get("NHPLUG_DEFAULT_ACCOUNT", ""), dry_run=not send,
                           allow_live=allow_live, order_no_field=order_no, guard=audit.guard(),
-                          balance_fields=bfields)
+                          balance_fields=bfields, us=us)
     policy = (JevPolicy(cfg, JevClient(cfg.jev.model, timeout_sec=cfg.jev.timeout_sec))
               if policy_name == "jev" else BaselinePolicy(cfg))
     gate = RiskGate(limits, Ledger())
     restore_ledger(audit, gate)
     engine = TradingEngine(gate=gate, broker=broker, policy=policy, theses=theses,
                            min_bars=cfg.min_bars, audit=audit, entry_order_type=entry_order_type,
-                           notify=notify)
-
-    if repo:
-        rcfg = ResearchConfig.from_yaml(ROOT / "config" / "research.yaml")
-        symbols = [u.symbol for u in rcfg.universe if u.market is Market.KR]
-    else:
-        symbols = [s for m, s in theses.watchlist(datetime.now(timezone.utc)) if m is Market.KR]
-    if not symbols:
-        raise StartupBlocked("매매 대상 국내 종목이 없습니다")
-    loop = LoopConfig(symbols, fields, ROOT / "data" / "KILL", repo=repo)
+                           notify=make_notifier(f"{mode}/{policy_name}"),
+                           fx_rates={Market.KR: Decimal(1)})
+    loop = LoopConfig(specs, ROOT / "data" / "KILL", repo=repo,
+                      fx_source=fx_source if Market.US in markets else None)
     return Assembly(engine, broker, loop)

@@ -1,11 +1,10 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
 
-from harness.models import AccountState, EntrySignal, Market, Position
+from harness.models import AccountState, Market, Position
 from harness.risk import RiskLimits
 
 from .conftest import KST, ROOT, kr_signal

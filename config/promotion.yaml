@@ -5,3 +5,13 @@ require_positive_pnl: true        # 비용 추정 반영 후
 require_beats_baseline: true      # Jev 정책 손익 > 비교군 손익
 min_jev_skill: 0.0                # Brier skill > 0 (확률에 정보가 있어야 함)
 min_calibration_samples: 200
+
+# P3(국내 실거래 20만원) → P4(국내+미국, 50만원) 승격 기준
+p4:
+  min_live_weeks: 4
+  min_live_trades: 20
+  max_median_slippage_bps: 30     # 시장가 진입 체결가 vs 신호가(봉 종가) 중앙값
+  allow_halts: 0                  # 실거래 중 정지(손실 한도·장부 불일치·킬 스위치) 허용 횟수
+  min_us_mock_weeks: 4
+  min_us_mock_trades: 30
+  require_us_mock_positive_pnl: true

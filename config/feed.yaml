@@ -2,3 +2,7 @@
 # 비어 있으면 scripts/run_mock.py 가 시작을 거부한다.
 price_field: null
 volume_field: null   # 체결 1건의 수량(누적거래량 아님)
+
+# 미국 실시간 체결가(RC) — tr_key 는 GIC 15자리(종목마스터 m_gtsstock 에서 자동 변환)
+us_price_field: null
+us_volume_field: null

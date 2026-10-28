@@ -3,6 +3,7 @@
     python scripts/run_mock.py data/theses.sqlite --send                    # Jev 정책
     python scripts/run_mock.py data/theses.sqlite --send --policy baseline  # 비교군 (별도 프로세스)
     python scripts/run_mock.py config/theses.yaml                           # 사람이 쓴 논지, dry_run
+    python scripts/run_mock.py data/theses.sqlite --send --markets KR,US    # P4: 국내+미국 상주
 
 긴급 정지: data/KILL 파일을 만들면 신규 진입 중단 + 전량 청산.
 """
@@ -14,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from harness.bootstrap import StartupBlocked, assemble  # noqa: E402
-from harness.models import OrderType  # noqa: E402
+from harness.models import Market, OrderType  # noqa: E402
 from harness.runner import run_loop  # noqa: E402
 
 
@@ -23,11 +24,13 @@ def main() -> None:
     p.add_argument("theses")
     p.add_argument("--send", action="store_true")
     p.add_argument("--policy", choices=["jev", "baseline"], default="jev")
+    p.add_argument("--markets", default="KR", help="KR 또는 KR,US")
     a = p.parse_args()
+    markets = tuple(Market(m.strip()) for m in a.markets.split(","))
     try:
         asm = assemble(mode="mock", theses_path=a.theses, policy_name=a.policy, risk_file="risk.yaml",
                        send=a.send, audit_name=f"audit-{a.policy}.sqlite",
-                       entry_order_type=OrderType.MARKET)
+                       entry_order_type=OrderType.MARKET, markets=markets)
     except StartupBlocked as e:
         sys.exit(f"시작 거부: {e}")
     if not asm.broker.is_mock():

@@ -1,0 +1,4 @@
+# USD/KRW 환율. 자동 조회 경로가 없어 수동 갱신(장 시작 전). as_of 가 max_age_days 보다 오래되면 미국 매매 중단.
+usd_krw: null
+as_of: null          # 예: 2026-10-28
+max_age_days: 3
