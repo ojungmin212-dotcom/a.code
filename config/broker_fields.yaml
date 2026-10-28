@@ -1,0 +1,7 @@
+# 나무 PLUG 국내 잔고(/krstock/inquiry/v1/balance) 응답 필드명. mock_smoke.py 의 잔고 원문을 보고 채운다.
+# 하나라도 비어 있으면 잔고 대조가 꺼지고, 실거래(run_live.py)는 시작을 거부한다.
+order_no_field: null      # 주문 응답 Output_0 의 주문번호
+holdings_list: null       # 보유종목 목록이 들어 있는 키 (예: Output_1)
+symbol_field: null        # 종목코드
+quantity_field: null      # 보유수량
+avg_price_field: null     # 평균매입단가

@@ -91,3 +91,13 @@ def jev_calibration(audit: AuditLog, horizon_min: int = 15) -> Calibration:
         if ys:
             bins.append((f"{lo:.1f}-{hi:.1f}", len(ys), sum(ys) / len(ys)))
     return Calibration(n, brier, base, (1 - brier / base) if base else None, bins)
+
+
+def slippage_bps(audit: AuditLog) -> list[float]:
+    """진입 체결가 vs 신호 가격(봉 종가) 차이, bp. 양수 = 불리하게 체결. 모의·실거래 괴리 점검용."""
+    out = []
+    for e in audit.events("fill"):
+        p = e["payload"]
+        sig = float(Decimal(str(p["signal_price"])))
+        out.append((float(Decimal(str(p["price"]))) / sig - 1) * 10_000)
+    return out

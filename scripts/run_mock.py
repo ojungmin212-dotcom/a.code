@@ -1,106 +1,39 @@
 """모의투자 장중 운영 (국내). 기본은 dry_run — 주문은 --send 일 때만 모의 서버로 전송.
 
-    python scripts/run_mock.py config/theses.yaml                    # 판단·로그만
-    python scripts/run_mock.py config/theses.yaml --send             # 모의투자 주문 전송
-    python scripts/run_mock.py config/theses.yaml --policy baseline  # 비교군
-    python scripts/run_mock.py data/theses.sqlite                    # P2: Grok 논지(run_research.py 가 작성)
+    python scripts/run_mock.py data/theses.sqlite --send                    # Jev 정책
+    python scripts/run_mock.py data/theses.sqlite --send --policy baseline  # 비교군 (별도 프로세스)
+    python scripts/run_mock.py config/theses.yaml                           # 사람이 쓴 논지, dry_run
+
+긴급 정지: data/KILL 파일을 만들면 신규 진입 중단 + 전량 청산.
 """
 from __future__ import annotations
 
 import argparse
-import os
-import queue
 import sys
-import time
-from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-from harness.audit import AuditLog  # noqa: E402
-from harness.broker.nhplug_broker import NHPlugBroker  # noqa: E402
-from harness.decision import BaselinePolicy, JevClient, JevPolicy, StrategyConfig  # noqa: E402
-from harness.engine import TradingEngine, restore_ledger, unreconciled_symbols  # noqa: E402
-from harness.market.bars import BarAggregator  # noqa: E402
-from harness.market.nh_feed import FeedFields, NHTickFeed  # noqa: E402
-from harness.models import Market  # noqa: E402
-from harness.research import ThesisStore  # noqa: E402
-from harness.research.repo import ThesisRepo  # noqa: E402
-from harness.research.service import ResearchConfig  # noqa: E402
-from harness.risk import SESSIONS, Ledger, RiskGate, RiskLimits  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from harness.bootstrap import StartupBlocked, assemble  # noqa: E402
+from harness.models import OrderType  # noqa: E402
+from harness.runner import run_loop  # noqa: E402
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("theses_yaml")
+    p.add_argument("theses")
     p.add_argument("--send", action="store_true")
     p.add_argument("--policy", choices=["jev", "baseline"], default="jev")
-    p.add_argument("--order-no-field", default=None, help="mock_smoke.py 로 확인한 주문번호 필드명")
     a = p.parse_args()
-
-    feed_cfg = yaml.safe_load((ROOT / "config" / "feed.yaml").read_text(encoding="utf-8"))
-    if not feed_cfg.get("price_field") or not feed_cfg.get("volume_field"):
-        sys.exit("config/feed.yaml 의 price_field / volume_field 를 먼저 채우세요 (scripts/capture_feed.py).")
-
-    limits = RiskLimits.from_yaml(ROOT / "config" / "risk.yaml")
-    cfg = StrategyConfig.from_yaml(ROOT / "config" / "strategy.yaml")
-    repo = ThesisRepo(a.theses_yaml) if a.theses_yaml.endswith(".sqlite") else None
-    theses = repo.store() if repo else ThesisStore.from_yaml(a.theses_yaml)
-    audit = AuditLog(ROOT / "data" / f"audit-{a.policy}.sqlite")
-    broker = NHPlugBroker(os.environ.get("NHPLUG_DEFAULT_ACCOUNT", ""), dry_run=not a.send,
-                          order_no_field=a.order_no_field, guard=audit.guard())
-    policy = (JevPolicy(cfg, JevClient(cfg.jev.model, timeout_sec=cfg.jev.timeout_sec))
-              if a.policy == "jev" else BaselinePolicy(cfg))
-    leftover = unreconciled_symbols(audit)
-    if leftover:
-        sys.exit(f"이전 실행의 미청산/결과불명 주문이 있습니다: {leftover}. "
-                 "브로커 화면으로 확인·정리한 뒤 감사 로그에 pending_resolved 를 남기고 다시 시작하세요.")
-    gate = RiskGate(limits, Ledger())
-    restore_ledger(audit, gate)
-    engine = TradingEngine(gate=gate, broker=broker, policy=policy,
-                           theses=theses, min_bars=cfg.min_bars, audit=audit)
-
-    if repo:  # 논지가 장중에 생기거나 사라지므로 후보 종목 전체를 구독
-        rcfg = ResearchConfig.from_yaml(ROOT / "config" / "research.yaml")
-        symbols = [u.symbol for u in rcfg.universe if u.market is Market.KR]
-    else:
-        symbols = [s for m, s in theses.watchlist(datetime.now(timezone.utc)) if m is Market.KR]
-    if not symbols:
-        sys.exit("지금 유효한 국내 Thesis 가 없습니다.")
-    fields = FeedFields(feed_cfg["price_field"], feed_cfg["volume_field"])
-    agg = BarAggregator()
-    feed = None
-    print(f"정책={policy.name} 전송={'모의' if a.send else 'dry_run'} 종목={symbols}")
-
-    last_reload = datetime.now(timezone.utc)
-    while True:
-        now = datetime.now(timezone.utc)
-        if repo and (now - last_reload).total_seconds() >= 60:
-            engine.theses = repo.store()
-            last_reload = now
-        kr = SESSIONS[Market.KR]
-        if not kr.is_open(now):
-            engine.flatten_if_due(now)
-            if kr.minutes_to_close(now) < 0:
-                print("장 마감 — 종료")
-                return
-            time.sleep(30)
-            continue
-        if feed is None or not feed.alive():
-            feed = NHTickFeed(symbols, fields)
-            feed.start()
-        try:
-            tick = feed.ticks.get(timeout=1.0)
-        except queue.Empty:
-            engine.flatten_if_due(now)
-            continue
-        bar = agg.add(tick)
-        if bar is not None:
-            engine.on_bar(bar, tick.ts)
-        engine.flatten_if_due(now)
+    try:
+        asm = assemble(mode="mock", theses_path=a.theses, policy_name=a.policy, risk_file="risk.yaml",
+                       send=a.send, audit_name=f"audit-{a.policy}.sqlite",
+                       entry_order_type=OrderType.MARKET)
+    except StartupBlocked as e:
+        sys.exit(f"시작 거부: {e}")
+    if not asm.broker.is_mock():
+        sys.exit("run_mock.py 는 모의투자 서버 전용입니다 (NHPLUG_BASE_URL 확인)")
+    asm.engine.notify(f"시작 — 전송={'모의' if a.send else 'dry_run'} 종목={asm.loop.symbols}")
+    run_loop(asm.engine, asm.broker, asm.loop)
 
 
 if __name__ == "__main__":

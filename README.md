@@ -61,13 +61,31 @@ python scripts/run_mock.py data/theses.sqlite --policy baseline     # 비교군
 python scripts/report.py data/audit-jev.sqlite data/audit-baseline.sqlite
 ```
 
+## P3 구성 (국내 실거래 20만원)
+
+| 모듈 | 내용 |
+|---|---|
+| `harness/promotion.py` | 승격 심사 — 모의 운영 6주·100회·비용 반영 손익>0·비교군 우위·Jev 보정 skill>0·미해소 없음 |
+| `harness/engine.py` `reconcile()` | 브로커 잔고로 결과불명 주문 확정, 하네스 종목의 장부 불일치 시 정지 |
+| `harness/runner.py` · `bootstrap.py` | 모의·실거래 공용 운영 루프와 조립, 킬 스위치(`data/KILL`) |
+| `harness/notify.py` | 콘솔 + 텔레그램 알림(체결·청산·정지) |
+| `config/risk.live.yaml` | 실거래 한도: 총손실 4만·일일 6천·1회 2천원, 1종목, 미국 금지 |
+
+```bash
+python scripts/promotion_check.py                 # 승격 심사만
+python scripts/run_live.py data/theses.sqlite     # 심사 통과 + HARNESS_ALLOW_LIVE + 확인 문구 입력 시에만 시작
+touch data/KILL                                   # 긴급 정지(신규 진입 중단 + 전량 청산)
+python scripts/resume.py data/audit-live.sqlite "정지 원인과 조치 내용"
+```
+
 ## 알려진 한계
 - 주문번호 응답 필드명 미확인 → 확인 전까지 모든 실제 전송은 `UNKNOWN` 처리
 - 잔고 응답 파싱 미구현 (원본만 조회)
 - 미국 주식 주문 미지원 (해외 매도 경로 미검증)
 - 휴장일·조기폐장 미반영
 - 실시간 체결가 푸시의 가격·수량 필드명 미확인 → `config/feed.yaml` 이 비어 있으면 `run_mock.py` 가 시작을 거부
-- 체결통보(d2) 미연동 → 실제 전송 주문은 전부 '대조 필요'로 묶이고 사람이 확인해야 다음 주문 가능
+- 체결 확인은 잔고 대조 방식(5초 주기) — 잔고에는 체결가가 없어 매도 손익은 직전 시세로 추정. 체결통보(d2) 미연동
+- 주문 취소 API 미구현 → 진입·청산 모두 시장가 주문 사용(지정가 미체결 잔류 위험 회피, 대신 슬리피지 감수)
 - 봉 시각은 수신 시각 기준, 거래 없는 분은 봉이 생기지 않음
 - 리플레이 청산은 봉 종가 체결로 근사 (갭·슬리피지 무시)
 - Grok 요청·응답 형식과 모델명(grok-4.7)은 공식 문서를 직접 확인하지 못함 → `grok_ping.py` 로 확인 필요

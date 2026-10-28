@@ -1,0 +1,7 @@
+# P2(모의) → P3(실거래) 승격 기준. docs/harness-design.md §9. 완화하려면 이 파일을 고치고 이유를 커밋 메시지에 남길 것.
+min_weeks: 6
+min_trades: 100
+require_positive_pnl: true        # 비용 추정 반영 후
+require_beats_baseline: true      # Jev 정책 손익 > 비교군 손익
+min_jev_skill: 0.0                # Brier skill > 0 (확률에 정보가 있어야 함)
+min_calibration_samples: 200

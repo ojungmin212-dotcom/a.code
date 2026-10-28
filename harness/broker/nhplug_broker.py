@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from harness.models import Market, OrderRequest, OrderResult, OrderStatus, OrderType, Side
@@ -31,6 +33,22 @@ class LiveTradingBlocked(RuntimeError):
     pass
 
 
+class NotConfigured(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class BalanceFields:
+    holdings_list: str
+    symbol_field: str
+    quantity_field: str
+    avg_price_field: str
+
+
+def _num(v: Any) -> Decimal:
+    return Decimal(str(v).replace(",", "").strip() or "0")
+
+
 def _host(base_url: str) -> str:
     return base_url.split("//")[-1].split("/")[0].split(":")[0].lower()
 
@@ -40,7 +58,8 @@ class NHPlugBroker:
                  order_no_field: str | None = None,
                  call: Callable[..., Any] | None = None,
                  base_url: Callable[[], str] | None = None,
-                 guard: Guard | None = None):
+                 guard: Guard | None = None,
+                 balance_fields: BalanceFields | None = None):
         if not account_no:
             raise ValueError("account_no 가 필요합니다")
         if call is None or base_url is None:
@@ -54,6 +73,7 @@ class NHPlugBroker:
         self._call = call
         self._base_url = base_url
         self._guard = guard or IdempotencyGuard()
+        self.balance_fields = balance_fields
         self._assert_environment()
 
     # ------------------------------------------------------------------ 환경 가드
@@ -137,3 +157,21 @@ class NHPlugBroker:
             "act_no": self.account_no, "bnc_bse_cd": "5", "ltg_aot_dit_cd": "9",
             "aet_bse": "2", "qut_dit_cd": "UNT", "aly_qut_cd": "1",
         })
+
+    def holdings(self) -> dict[tuple[Market, str], tuple[int, Decimal]]:
+        """국내 보유 잔고 → {(KR, 종목): (수량, 평균단가)}. 형식이 기대와 다르면 예외(조용히 0 으로 보지 않음)."""
+        f = self.balance_fields
+        if f is None:
+            raise NotConfigured("config/broker_fields.yaml 의 잔고 필드명이 비어 있습니다")
+        data = self.raw_kr_balance()
+        if not isinstance(data, dict) or f.holdings_list not in data:
+            raise RuntimeError(f"잔고 응답에 {f.holdings_list} 없음: rsp_msg={data.get('rsp_msg') if isinstance(data, dict) else data}")
+        rows = data[f.holdings_list] or []
+        rows = rows if isinstance(rows, list) else [rows]
+        out: dict[tuple[Market, str], tuple[int, Decimal]] = {}
+        for r in rows:
+            sym = str(r[f.symbol_field]).strip()
+            qty = int(_num(r[f.quantity_field]))
+            if sym and qty > 0:
+                out[(Market.KR, sym)] = (qty, _num(r[f.avg_price_field]))
+        return out

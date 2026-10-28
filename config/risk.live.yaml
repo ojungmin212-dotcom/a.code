@@ -1,0 +1,15 @@
+# P3 실거래 한도 — 실거래 20만원. 손실 한도는 50만원 기준 비율(20%·3%·1%)을 유지.
+initial_capital_krw: 200000
+max_total_loss_krw: 40000         # 도달 시 전량 청산 + 정지
+max_daily_loss_krw: 6000
+max_loss_per_trade_krw: 2000
+max_open_positions: 1
+max_position_krw: 100000
+max_trades_per_day: {KR: 4, US: 0}  # 미국은 P4 전까지 금지
+max_consecutive_losses: 2
+min_confidence: 0.65
+min_edge_cost_multiple: 3.0
+round_trip_cost_pct: {KR: 0.25, US: 0.50}   # 모의 운영 실측으로 교체할 것
+no_entry_after_open_min: 10
+no_entry_before_close_min: 15
+flatten_before_close_min: 15
