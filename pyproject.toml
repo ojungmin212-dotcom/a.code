@@ -1,0 +1,19 @@
+[project]
+name = "a-code-harness"
+version = "0.1.0"
+description = "Grok + Jev 기반 장중 주식 매매 하네스 (P0: 리스크 게이트 · 브로커 어댑터)"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "nhplug>=0.4.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["harness*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

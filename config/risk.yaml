@@ -1,0 +1,16 @@
+# 리스크 한도 (docs/harness-design.md §5). 금액 단위: 원(KRW)
+initial_capital_krw: 500000
+max_total_loss_krw: 100000        # 도달 시 전량 청산 + 정지, 수동 재개만 허용
+max_daily_loss_krw: 15000         # 같은 거래일(시장 현지 날짜) 국내+미국 합산
+max_loss_per_trade_krw: 5000      # 손절가 기준 수량 역산
+max_open_positions: 2
+max_position_krw: 250000
+max_trades_per_day: {KR: 6, US: 6}
+max_consecutive_losses: 3         # 시장별, 당일 기준
+min_confidence: 0.65
+min_edge_cost_multiple: 3.0       # 기대수익 >= 왕복비용 x 3
+# 왕복 비용 추정치(수수료+세금+환전). 실측으로 반드시 교체할 것.
+round_trip_cost_pct: {KR: 0.25, US: 0.50}
+no_entry_after_open_min: 10
+no_entry_before_close_min: 15
+flatten_before_close_min: 15
