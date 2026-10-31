@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -34,6 +35,7 @@ class PromotionCriteria(BaseModel):
     min_calibration_samples: int = Field(ge=0)
     p4: P4Criteria
     p4_enabled: bool = False  # D1
+    require_beats_index: bool = False  # F7: KOSPI 보유 대비 초과수익 (데이터 조회 실패 시 미달 처리)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PromotionCriteria:
@@ -77,6 +79,13 @@ def evaluate(jev: AuditLog, baseline: AuditLog, c: PromotionCriteria, now: datet
     if c.require_beats_baseline:
         r.add("비교군 대비 우위", bs.trades > 0 and js.total_krw > bs.total_krw,
               f"Jev {js.total_krw:,.0f}원 vs 비교군 {bs.total_krw:,.0f}원 ({bs.trades}회)")
+
+    if c.require_beats_index:
+        from harness.benchmark import compare
+        b = compare(jev, Decimal(500000))  # 모의 운영 자본(risk.yaml)
+        ok = bool(b and b.excess_pct is not None and b.excess_pct > 0)
+        r.add("KOSPI 대비 초과수익", ok,
+              f"{b.excess_pct:+.2f}%p" if b and b.excess_pct is not None else "지수 미확인")
 
     cal = jev_calibration(jev)
     ok = (cal.n >= c.min_calibration_samples and cal.skill is not None

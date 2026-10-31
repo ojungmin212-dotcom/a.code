@@ -18,3 +18,6 @@ p4:
 
 # D1: 미국(P4)은 로드맵에서 보류. true 로 바꿔야 미국 모의·실거래가 시작된다.
 p4_enabled: false
+
+# F7: KOSPI 를 그냥 보유했을 때보다 나아야 하는가 (true 권장 — 데이터 조회 실패 시 미달)
+require_beats_index: true

@@ -3,7 +3,8 @@
 ## 빠른 시작 (v1.1)
 ```bash
 pip install -e ".[dev]" && pytest
-cp .env.example .env                              # 키·모의계좌 입력
+cp .env.example .env && chmod 600 .env            # 키·모의계좌 입력
+python scripts/doctor.py                          # 설정·보안 자가 점검(네트워크 없음)
 python scripts/check_all.py --send --apply        # 국내 장중: 연결·필드 일괄 점검
 python scripts/run_research.py                    # 창 1: Grok 리서치
 python scripts/run_mock.py data/theses.sqlite --send   # 창 2: Jev(모의계좌) + 비교군(메모리) + 섀도
@@ -11,6 +12,7 @@ python scripts/report.py data/audit-jev.sqlite data/audit-baseline.sqlite
 ```
 - 계좌 상태를 대화로 확인: [docs/nhplug-mcp.md](docs/nhplug-mcp.md) (K1)
 - 미국(P4)은 보류 중(D1) — `config/promotion.yaml` `p4_enabled`
+- 무인 운영(평일 자동 실행·생존 신호): [docs/operations.md](docs/operations.md) · 보안 점검: [docs/security-review.md](docs/security-review.md)
 
 설계: [docs/harness-design.md](docs/harness-design.md)
 
@@ -110,7 +112,6 @@ python scripts/run_live.py data/theses.sqlite --p4                # P3·P4 심�
 - 주문번호 응답 필드명 미확인 → 확인 전까지 모든 실제 전송은 `UNKNOWN` 처리
 - 잔고 응답 파싱 미구현 (원본만 조회)
 - 미국 주식 주문 미지원 (해외 매도 경로 미검증)
-- 휴장일·조기폐장 미반영 (미국 추수감사절 다음날 등 조기폐장일에 마감 청산이 늦을 수 있음)
 - 미국: 매도 경로·잔고 필드·RC 푸시 필드 미확인, 소수점 주문 미지원(25만원 한도로 1주가 비싼 종목은 거래 불가), 환율 수동 갱신
 - 실시간 체결가 푸시의 가격·수량 필드명 미확인 → `config/feed.yaml` 이 비어 있으면 `run_mock.py` 가 시작을 거부
 - 체결 확인은 잔고 대조 방식(5초 주기) — 잔고에는 체결가가 없어 매도 손익은 직전 시세로 추정. 체결통보(d2) 미연동

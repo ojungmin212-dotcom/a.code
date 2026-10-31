@@ -23,3 +23,12 @@ shadow:
   usd_per_m_input_tokens: 0.042
 # 비교군(브로커 미사용, 메모리 모의 체결)에 적용할 불리한 체결 가정(bp). Jev 실측 슬리피지로 교체할 것.
 paper_slippage_bps: 10
+# 주문 실행 (F2·F3)
+execution:
+  entry_order: market        # market | limit — limit 은 신호가(봉 종가) 지정가 + 미체결 시 자동 취소
+  pending_timeout_sec: 60    # 체결 확인 대기 시간. limit 은 이 시간 뒤 잔량 취소
+  fill_notices: true         # 체결통보(d2) 구독 — 정확한 체결가. 웹소켓 세션 1개 추가 사용
+# 운영 (F11·F13)
+operations:
+  heartbeat_min: 60          # 생존 신호 알림 주기(분). 0 이면 끔
+  record_ticks: true         # 모든 틱을 data/ticks/ 에 CSV 로 저장(자체 데이터셋)

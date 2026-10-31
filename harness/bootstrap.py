@@ -93,7 +93,7 @@ def p4_enabled() -> bool:
 
 
 def assemble(*, mode: str, theses_path: str, policies: list[str], broker_policy: str,
-             risk_file: str, send: bool, entry_order_type: OrderType,
+             risk_file: str, send: bool, entry_order_type: OrderType | None = None,
              markets: tuple[Market, ...] = (Market.KR,), allow_live: bool = False,
              audit_names: dict[str, str] | None = None) -> Assembly:
     if broker_policy not in policies:
@@ -112,6 +112,8 @@ def assemble(*, mode: str, theses_path: str, policies: list[str], broker_policy:
 
     limits = RiskLimits.from_yaml(ROOT / "config" / risk_file)
     cfg = StrategyConfig.from_yaml(ROOT / "config" / "strategy.yaml")
+    if entry_order_type is None:
+        entry_order_type = OrderType.LIMIT if cfg.execution.entry_order == "limit" else OrderType.MARKET
     repo = ThesisRepo(theses_path) if theses_path.endswith(".sqlite") else None
     theses = repo.store() if repo else ThesisStore.from_yaml(theses_path)
     audit_names = audit_names or {}
@@ -163,5 +165,9 @@ def assemble(*, mode: str, theses_path: str, policies: list[str], broker_policy:
         lanes.append(Lane(engine, broker))
 
     loop = LoopConfig(specs, ROOT / "data" / "KILL", repo=repo,
-                      fx_source=fx_source if Market.US in markets else None)
+                      fx_source=fx_source if Market.US in markets else None,
+                      pending_timeout_sec=cfg.execution.pending_timeout_sec,
+                      fill_notices=cfg.execution.fill_notices,
+                      tick_dir=ROOT / "data" / "ticks" if cfg.operations.record_ticks else None,
+                      heartbeat_min=cfg.operations.heartbeat_min)
     return Assembly(lanes, loop)

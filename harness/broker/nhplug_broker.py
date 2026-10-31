@@ -191,6 +191,23 @@ class NHPlugBroker:
         return OrderResult(client_order_id=cid, status=status, broker_order_id=order_no,
                            message=msg, raw=data)
 
+    def cancel(self, market: Market, symbol: str, order_no: str) -> dict:
+        """미체결 잔량 전량 취소. dry_run 이면 payload 만 돌려준다. 결과는 판정하지 않고 원문 반환."""
+        if market is Market.KR:
+            path, input_0 = "/krstock/order/v1/cancel", {
+                "act_no": self.account_no, "org_mkt_orr_no": int(order_no),
+                "all_pat_dit_cd": "1", "iem_cd": symbol}
+        else:
+            if self.us is None:
+                raise NotImplementedError("미국 주문 비활성")
+            path, input_0 = "/gbstock/order/v1/cancel", {
+                "act_no": self.account_no, "org_orr_no": int(order_no),
+                "fc_sec_trd_nat_cd": self.us.nation_code, "iem_cd": symbol, "all_pat_dit_cd": "1"}
+        if self.dry_run:
+            return {"dry_run": True, "path": path, "Input_0": input_0}
+        self._assert_environment()
+        return self._call(path, input_0)
+
     # ------------------------------------------------------------------ 조회(원본)
     def raw_accounts(self) -> dict:
         return self._call("/n2/acctinfo", {})

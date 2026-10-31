@@ -194,7 +194,8 @@ def fill_log(pnls, start, with_cal=0, rise=True):
 
 
 def test_promotion_pass_and_fail():
-    c = PromotionCriteria.from_yaml(ROOT / "config" / "promotion.yaml")
+    c = PromotionCriteria.from_yaml(ROOT / "config" / "promotion.yaml").model_copy(
+        update={"require_beats_index": False})  # 지수 조건은 test_benchmark 에서 (네트워크 무관하게)
     start = datetime(2026, 9, 1, 10, 0, tzinfo=KST)
     now = start + timedelta(weeks=7)
     good = fill_log([100] * 100, start, with_cal=200)

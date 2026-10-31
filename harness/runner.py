@@ -21,6 +21,8 @@ from harness.broker.paper import PaperBroker
 from harness.engine import TradingEngine
 from harness.market.bars import BarAggregator
 from harness.market.nh_feed import FeedFields, NHTickFeed
+from harness.market.notices import NHNoticeFeed
+from harness.market.recorder import TickRecorder
 from harness.models import Market
 from harness.research.repo import ThesisRepo
 from harness.risk import SESSIONS
@@ -53,10 +55,29 @@ class LoopConfig:
     reconcile_every_sec: float = 5.0
     repo: ThesisRepo | None = None
     fx_source: Callable[[datetime], dict[Market, Decimal]] | None = None
+    pending_timeout_sec: float = 60
+    fill_notices: bool = False
+    tick_dir: Path | None = None
+    heartbeat_min: int = 0
 
     @property
     def symbols(self) -> list[str]:
         return [f"{s.market.value}:{x}" for s in self.specs for x in s.symbols]
+
+
+def summary(lanes: list[Lane], now: datetime, title: str) -> str:
+    lines = [title]
+    for ln in lanes:
+        e = ln.engine
+        days = {SESSIONS[m].trading_date(now) for m in SESSIONS}
+        pnl = sum(e.gate.ledger.daily_realized(d) for d in days)
+        today = now.strftime("%Y-%m-%d")
+        shadow = sum(1 for x in e.audit.events("shadow") if x["ts"][:10] == today) if e.shadow else 0
+        lines.append(f"- {e.policy.name}{'(paper)' if ln.is_paper else ''}: 보유 {len(e.positions)} · "
+                     f"대기 {len(e.pending)} · 오늘 실현 {pnl:,.0f}원 · 누적 {e.gate.ledger.cumulative_realized_krw:,.0f}원"
+                     + (f" · 섀도 {shadow}건" if e.shadow else "")
+                     + (f" · 🛑 {e.gate.ledger.halt_reason}" if e.gate.ledger.halted else ""))
+    return "\n".join(lines)
 
 
 def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
@@ -65,10 +86,24 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
     scope = {(s.market, x) for s in cfg.specs for x in (s.tradable or s.symbols)}
     agg = BarAggregator()
     feeds: dict[Market, NHTickFeed] = {}
+    broker_lane = next((ln for ln in lanes if not ln.is_paper), None)
+    notices: NHNoticeFeed | None = None
+    recorder = TickRecorder(cfg.tick_dir) if cfg.tick_dir else None
     last_slow = last_reconcile = datetime.fromtimestamp(0, timezone.utc)
+    last_beat = datetime.now(timezone.utc)
 
     while True:
         now = datetime.now(timezone.utc)
+        if cfg.heartbeat_min and (now - last_beat).total_seconds() >= cfg.heartbeat_min * 60:
+            lanes[0].engine.notify(summary(lanes, now, "💓 생존 신호"))
+            last_beat = now
+        if broker_lane and cfg.fill_notices and not broker_lane.broker.dry_run:
+            if notices is None or not notices.alive():
+                notices = NHNoticeFeed()
+                notices.start()
+            while not notices.notices.empty():
+                n = notices.notices.get_nowait()
+                broker_lane.engine.on_fill_notice(n.order_no, n.qty, n.price, n.rejected, now)
         for ln in lanes:
             e = ln.engine
             if cfg.kill_file.exists() and not e.gate.ledger.halted:
@@ -93,7 +128,7 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
             for ln in lanes:
                 if not ln.is_paper and ln.broker.balance_fields:
                     try:
-                        ln.engine.reconcile(ln.broker.holdings(), now, scope)
+                        ln.engine.reconcile(ln.broker.holdings(), now, scope, cfg.pending_timeout_sec)
                     except Exception as e:  # 잔고 조회 실패는 기록만 하고 다음 주기에 재시도
                         ln.engine.audit.record("reconcile_error", {"error": str(e)}, ts=now)
             last_reconcile = now
@@ -102,10 +137,12 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
         if not open_specs:
             for ln in lanes:
                 ln.engine.flatten_if_due(now)
-            all_done = all(SESSIONS[s.market].minutes_to_close(now) < 0 for s in cfg.specs)
+            all_done = all(SESSIONS[s.market].done_for_day(now) for s in cfg.specs)
             busy = any(ln.engine.positions or ln.engine.pending for ln in lanes)
             if all_done and not busy:
-                lanes[0].engine.notify("장 마감 — 종료")
+                lanes[0].engine.notify(summary(lanes, now, "📊 장 마감 요약 — 종료"))
+                if recorder:
+                    recorder.close()
                 return
             time.sleep(5)
             continue
@@ -123,6 +160,8 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
             for ln in lanes:
                 ln.engine.flatten_if_due(now)
             continue
+        if recorder:
+            recorder.write(tick)
         bar = agg.add(tick)
         for ln in lanes:
             if ln.is_paper:

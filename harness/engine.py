@@ -46,6 +46,17 @@ class PendingOrder:
     sent_at: datetime
     reason: str
     signal: EntrySignal | None = None
+    order_type: OrderType = OrderType.MARKET
+    filled_qty: int = 0                      # 체결통보(d2) 누적
+    filled_value: Decimal = Decimal(0)
+    cancel_sent_at: datetime | None = None
+
+    def vwap(self) -> Decimal | None:
+        return self.filled_value / self.filled_qty if self.filled_qty else None
+
+
+def _norm_order_no(v: object) -> str:
+    return str(v or "").strip().lstrip("0")
 
 
 class TradingEngine:
@@ -223,7 +234,8 @@ class TradingEngine:
         if res.status is OrderStatus.FILLED:
             self._book_entry(key, sig, res.filled_quantity, res.fill_price, now)
         elif res.status in (OrderStatus.ACCEPTED, OrderStatus.UNKNOWN):
-            self.pending[key] = PendingOrder(res, Side.BUY, 0, risk.quantity, now, "entry", sig)
+            self.pending[key] = PendingOrder(res, Side.BUY, 0, risk.quantity, now, "entry", sig,
+                                             order_type=req.order_type)
 
     def _book_entry(self, key: Key, sig: EntrySignal, qty: int, fill: Decimal, now: datetime,
                     estimated: bool = False) -> None:
@@ -248,19 +260,30 @@ class TradingEngine:
             timed_out = now - po.sent_at >= timedelta(seconds=timeout_sec)
             if po.side is Side.BUY:
                 filled = held - po.qty_before
-                if filled >= po.qty_ordered or (timed_out and filled > 0):
+                if filled >= po.qty_ordered:
                     self.pending.pop(key)
-                    self._book_entry(key, po.signal, filled, avg, now)
+                    self._book_entry(key, po.signal, filled, po.vwap() or avg, now)
                 elif timed_out:
+                    if (po.order_type is OrderType.LIMIT and po.result.broker_order_id
+                            and po.cancel_sent_at is None):
+                        self._cancel(key, po, now)  # 미체결 지정가 잔량 취소 후 다음 주기에 확정
+                        continue
+                    if po.cancel_sent_at and now - po.cancel_sent_at < timedelta(seconds=timeout_sec / 2):
+                        continue
                     self.pending.pop(key)
-                    self.audit.record("pending_resolved", {"note": "시간 초과 · 잔고 변화 없음 → 미체결"},
-                                      market=key[0].value, symbol=key[1], ts=now)
+                    if filled > 0:
+                        self._book_entry(key, po.signal, filled, po.vwap() or avg, now)
+                    else:
+                        self.audit.record("pending_resolved", {"note": "시간 초과 · 잔고 변화 없음 → 미체결"},
+                                          market=key[0].value, symbol=key[1], ts=now)
             else:
                 sold = po.qty_before - held
                 if sold > 0 and (held == 0 or timed_out):
                     self.pending.pop(key)
-                    # 잔고에는 체결가가 없다 → 직전 시세로 추정(보수적 판단은 리포트에서 별도 확인)
-                    self._book_exit(key, sold, self.positions[key].last, po.reason, now, estimated=True)
+                    # 체결통보가 있으면 정확한 체결가, 없으면 직전 시세로 추정
+                    price = po.vwap()
+                    self._book_exit(key, sold, price or self.positions[key].last, po.reason, now,
+                                    estimated=price is None)
                 elif timed_out:
                     # 현금 계좌는 보유 수량 이상 매도가 불가능하므로 재주문해도 중복 매도 위험이 없다
                     self.pending.pop(key)
@@ -278,6 +301,47 @@ class TradingEngine:
                 if not self.gate.ledger.halted:
                     self.gate.ledger.halt(reason)
                     self._halted_now(now)
+
+    # ------------------------------------------------------------------ 체결통보 · 취소
+    def on_fill_notice(self, order_no: str, qty: int, price: Decimal, rejected: bool,
+                       now: datetime) -> None:
+        """체결통보(d2) 1건. 주문번호로 대기 주문을 찾아 정확한 체결가로 확정한다."""
+        no = _norm_order_no(order_no)
+        hit = next(((k, po) for k, po in self.pending.items()
+                    if no and _norm_order_no(po.result.broker_order_id) == no), None)
+        self.audit.record("fill_notice", {"order_no": order_no, "qty": qty, "price": price,
+                                          "rejected": rejected, "matched": hit is not None},
+                          market=hit[0][0].value if hit else None, symbol=hit[0][1] if hit else None, ts=now)
+        if hit is None:
+            return
+        key, po = hit
+        if rejected:
+            self.pending.pop(key)
+            self.notify(f"⚠️ {key[1]} 주문 거부(체결통보) — {po.reason}")
+            self.audit.record("pending_resolved", {"note": "체결통보 거부"},
+                              market=key[0].value, symbol=key[1], ts=now)
+            return
+        po.filled_qty += qty
+        po.filled_value += price * qty
+        if po.filled_qty < po.qty_ordered:
+            return  # 부분 체결 — 나머지 통보 또는 잔고 대조를 기다린다
+        self.pending.pop(key)
+        if po.side is Side.BUY:
+            self._book_entry(key, po.signal, po.filled_qty, po.vwap(), now)
+        else:
+            self._book_exit(key, po.filled_qty, po.vwap(), po.reason, now)
+
+    def _cancel(self, key: Key, po: PendingOrder, now: datetime) -> None:
+        po.cancel_sent_at = now
+        cancel = getattr(self.broker, "cancel", None)
+        if cancel is None:
+            return
+        try:
+            res = cancel(key[0], key[1], po.result.broker_order_id)
+        except Exception as e:
+            res = {"error": str(e)}
+        self.audit.record("cancel", {"order_no": po.result.broker_order_id, "result": res},
+                          market=key[0].value, symbol=key[1], ts=now)
 
     # ------------------------------------------------------------------ 공통
     def _halted_now(self, now: datetime) -> None:

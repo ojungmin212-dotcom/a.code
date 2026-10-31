@@ -26,7 +26,7 @@ claude
 ```json
 "nhplug": {
   "command": "npx",
-  "args": ["-y", "github:PLUG-OpenAPI/nhplug-mcp"],
+  "args": ["-y", "github:PLUG-OpenAPI/nhplug-mcp#413a14581bfbfec46b67ad78d8f59e4dd654dd2c"],
   "env": {
     "NHPLUG_APP_KEY": "발급받은_APP_KEY",
     "NHPLUG_APP_SECRET": "발급받은_APP_SECRET",
@@ -44,5 +44,7 @@ claude
 - "삼성전자 현재가"
 
 ## 주의
+- **버전 고정:** `#413a14581bfbfec46b67ad78d8f59e4dd654dd2c`(2026-09-28 커밋)로 고정했습니다. 고정하지 않으면 npx 가 캐시를 비울 때마다
+  GitHub 최신 코드를 앱키와 함께 실행합니다(공급망 위험). 업데이트는 변경 내역을 확인한 뒤 해시를 바꾸세요.
 - `NHPLUG_BASE_URL` 을 운영(`api.`)으로 바꾸면 **실계좌**를 조회합니다(주문은 꺼져 있어도 조회는 됨).
 - 토큰 재발급은 NH 보안 알림을 만들 수 있습니다. SDK·MCP 모두 `~/.nhplug/` 에 토큰을 캐시해 재사용합니다.

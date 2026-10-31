@@ -2,7 +2,7 @@
   "mcpServers": {
     "nhplug": {
       "command": "npx",
-      "args": ["-y", "github:PLUG-OpenAPI/nhplug-mcp"],
+      "args": ["-y", "github:PLUG-OpenAPI/nhplug-mcp#413a14581bfbfec46b67ad78d8f59e4dd654dd2c"],
       "env": {
         "NHPLUG_APP_KEY": "${NHPLUG_APP_KEY}",
         "NHPLUG_APP_SECRET": "${NHPLUG_APP_SECRET}",

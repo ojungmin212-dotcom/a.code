@@ -43,6 +43,19 @@ class ShadowSettings(BaseModel):
     usd_per_m_input_tokens: float = Field(gt=0)
 
 
+class ExecutionSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    entry_order: str = Field(default="market", pattern="^(market|limit)$")
+    pending_timeout_sec: float = Field(default=60, gt=0)
+    fill_notices: bool = True
+
+
+class OperationsSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    heartbeat_min: int = Field(default=60, ge=0)
+    record_ticks: bool = True
+
+
 class StrategyConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     version: str
@@ -53,6 +66,8 @@ class StrategyConfig(BaseModel):
     baseline: BaselineSettings
     shadow: ShadowSettings | None = None
     paper_slippage_bps: float = Field(default=0, ge=0)
+    execution: ExecutionSettings = ExecutionSettings()
+    operations: OperationsSettings = OperationsSettings()
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> StrategyConfig:

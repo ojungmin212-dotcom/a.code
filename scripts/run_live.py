@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from harness.audit import AuditLog  # noqa: E402
 from harness.bootstrap import StartupBlocked, assemble, fields_ready, p4_enabled  # noqa: E402
-from harness.models import Market, OrderType  # noqa: E402
+from harness.models import Market  # noqa: E402
 from harness.promotion import PromotionCriteria, evaluate, evaluate_p4  # noqa: E402
 from harness.runner import run_loop  # noqa: E402
 
@@ -60,7 +60,7 @@ def main() -> None:
         # Jev 만 실계좌로 주문, 비교군은 같은 시세로 메모리 모의체결(실거래 중에도 비교 지속)
         asm = assemble(mode="live", theses_path=args[0], policies=["jev", "baseline"],
                        broker_policy="jev", risk_file="risk.yaml" if p4 else "risk.live.yaml",
-                       send=True, entry_order_type=OrderType.MARKET, markets=markets,
+                       send=True, markets=markets,
                        allow_live=True, audit_names={"jev": "audit-live.sqlite",
                                                      "baseline": "audit-live-baseline.sqlite"})
     except StartupBlocked as e:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from harness.bootstrap import StartupBlocked, assemble  # noqa: E402
-from harness.models import Market, OrderType  # noqa: E402
+from harness.models import Market  # noqa: E402
 from harness.runner import run_loop  # noqa: E402
 
 
@@ -33,7 +33,7 @@ def main() -> None:
     try:
         asm = assemble(mode="mock", theses_path=a.theses, policies=policies,
                        broker_policy=a.broker_policy, risk_file="risk.yaml", send=a.send,
-                       entry_order_type=OrderType.MARKET, markets=markets)
+                       markets=markets)
     except StartupBlocked as e:
         sys.exit(f"시작 거부: {e}")
     if not asm.broker_lane.broker.is_mock():

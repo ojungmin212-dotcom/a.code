@@ -9,7 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from harness.audit import AuditLog  # noqa: E402
+from harness.benchmark import compare  # noqa: E402
 from harness.evaluation import jev_calibration, trade_stats  # noqa: E402
+from harness.risk import RiskLimits  # noqa: E402
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -20,6 +22,12 @@ if __name__ == "__main__":
         pf = f"{s.profit_factor:.2f}" if s.profit_factor is not None else "-"
         print(f"\n[{Path(db).name}] 청산 {s.trades}회 · 손익 {s.total_krw:,.0f}원 · 승률 {s.win_rate:.0%}"
               f" · 손익비 {pf} · 최대낙폭 {s.max_drawdown_krw:,.0f}원")
+        cap = RiskLimits.from_yaml(Path(__file__).resolve().parent.parent / "config" / "risk.yaml").initial_capital_krw
+        b = compare(a, cap)
+        if b:
+            idx = f"{b.index_pct:+.2f}% ({b.source})" if b.index_pct is not None else "지수 미확인"
+            ex = f" → 초과 {b.excess_pct:+.2f}%p" if b.excess_pct is not None else ""
+            print(f"  벤치마크 {b.start}~{b.end}: 전략 {b.strategy_pct:+.2f}% vs KOSPI {idx}{ex}")
         for label, ht in (("전체", None), ("논지 있음", True), ("논지 없음(섀도)", False)):
             c = jev_calibration(a, has_thesis=ht)
             if not c.n:
@@ -29,4 +37,4 @@ if __name__ == "__main__":
             if ht is None:
                 for rng, n, hit in c.bins:
                     print(f"    확률 {rng}: {n:5d}건 → 실제 상승 {hit:.0%}")
-    print("\n⚠️ 표본 100회 미만 결과는 운과 구분할 수 없습니다. 지수(KOSPI) 대비 비교는 아직 미연동.")
+    print("\n⚠️ 표본 100회 미만 결과는 운과 구분할 수 없습니다.")

@@ -25,6 +25,7 @@ from harness.risk import SESSIONS  # noqa: E402
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--once", action="store_true")
+    p.add_argument("--force", action="store_true", help="휴장일에도 실행(비용 발생)")
     a = p.parse_args()
 
     cfg = ResearchConfig.from_yaml(ROOT / "config" / "research.yaml")
@@ -43,6 +44,10 @@ def main() -> None:
             print(f"{now:%H:%M} {sym}: {r}")
 
     if a.once:
+        if not a.force and not any(SESSIONS[u.market].is_trading_day(datetime.now(timezone.utc))
+                                   for u in cfg.universe):
+            print("휴장일 — 리서치를 건너뜁니다(비용 절약). 강제 실행은 --force")
+            return
         run()
         return
 
@@ -52,7 +57,7 @@ def main() -> None:
         now = datetime.now(timezone.utc)
         for m in markets:
             s = SESSIONS[m]
-            if not s.is_weekday(now) or s.minutes_to_close(now) < 0:
+            if s.done_for_day(now):
                 continue
             prev = last.get(m)
             first_today = s.minutes_since_open(now) >= -60 and (
