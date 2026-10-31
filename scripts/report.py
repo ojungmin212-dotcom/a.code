@@ -20,9 +20,13 @@ if __name__ == "__main__":
         pf = f"{s.profit_factor:.2f}" if s.profit_factor is not None else "-"
         print(f"\n[{Path(db).name}] 청산 {s.trades}회 · 손익 {s.total_krw:,.0f}원 · 승률 {s.win_rate:.0%}"
               f" · 손익비 {pf} · 최대낙폭 {s.max_drawdown_krw:,.0f}원")
-        c = jev_calibration(a)
-        if c.n:
-            print(f"  Jev 보정: 표본 {c.n} · Brier {c.brier:.3f} (기준 {c.base_brier:.3f}, skill {c.skill:+.3f})")
-            for rng, n, hit in c.bins:
-                print(f"    확률 {rng}: {n:4d}건 → 실제 상승 {hit:.0%}")
+        for label, ht in (("전체", None), ("논지 있음", True), ("논지 없음(섀도)", False)):
+            c = jev_calibration(a, has_thesis=ht)
+            if not c.n:
+                continue
+            skill = f"{c.skill:+.3f}" if c.skill is not None else "-"
+            print(f"  Jev 보정[{label}]: 표본 {c.n} · Brier {c.brier:.3f} (기준 {c.base_brier:.3f}, skill {skill})")
+            if ht is None:
+                for rng, n, hit in c.bins:
+                    print(f"    확률 {rng}: {n:5d}건 → 실제 상승 {hit:.0%}")
     print("\n⚠️ 표본 100회 미만 결과는 운과 구분할 수 없습니다. 지수(KOSPI) 대비 비교는 아직 미연동.")

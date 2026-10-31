@@ -33,6 +33,16 @@ class BaselineSettings(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class ShadowSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    enabled: bool
+    extra_symbols: dict[str, list[str]] = Field(default_factory=dict)  # 시장 → 섀도 전용 종목(매매 안 함)
+    max_calls_per_day: int = Field(ge=0)
+    monthly_budget_krw: float = Field(ge=0)
+    usd_krw: float = Field(gt=0)
+    usd_per_m_input_tokens: float = Field(gt=0)
+
+
 class StrategyConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     version: str
@@ -41,6 +51,8 @@ class StrategyConfig(BaseModel):
     reward_risk: float = Field(gt=0)
     jev: JevSettings
     baseline: BaselineSettings
+    shadow: ShadowSettings | None = None
+    paper_slippage_bps: float = Field(default=0, ge=0)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> StrategyConfig:

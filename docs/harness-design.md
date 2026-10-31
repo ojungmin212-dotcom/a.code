@@ -1,6 +1,6 @@
-# 주식 투자 하네스 설계서 (v1.0 — P4 기준)
+# 주식 투자 하네스 설계서 (v1.1 — P4 코드 · 국내 우선)
 
-> 상태: **코드 P0~P4 구현 완료 · 실운영은 P0 연결 확인 단계** · 갱신일 2026-10-28
+> 상태: **코드 P0~P4 구현 완료 · 실운영은 P0 연결 확인 단계 · 미국(P4) 보류(D1)** · 갱신일 2026-10-31
 > 구성: Grok(리서치) + TypeSafe Jev(장중 판단) + NH 나무 PLUG(브로커) · 국내+미국 · 장중 매매
 > 자본: 모의 50만원 / P3 실거래 20만원 / P4 실거래 50만원 · 최대 허용손실 10만원(P4 기준)
 
@@ -12,7 +12,8 @@
 |---|---|
 | v0.1 | 초안 — JEV 미확인, 일 1회 스윙 |
 | v0.2 | Jev·나무 PLUG·장중·리스크 한도 확정, 2-속도 구조 |
-| **v1.0** | **P0~P4 구현 반영**: 실제 모듈·설정값·승격 기준·미확인 항목·비용 실측 필요 사항 |
+| v1.0 | P0~P4 구현 반영: 실제 모듈·설정값·승격 기준·미확인 항목·비용 실측 필요 사항 |
+| **v1.1** | **리뷰 반영(F1·F4·F5·F9·K1·D1)**: 공식 명세 필드 기본값, 섀도 판단, 일괄 점검, 단일 프로세스 다중 정책, NH MCP, 미국 보류 |
 
 v0.2 → v1.0 주요 변경:
 
@@ -62,19 +63,24 @@ v0.2 → v1.0 주요 변경:
 | 실시간 | 국내 체결가 통합 `mc`(종목코드) · 미국 `RC`(**GIC 15자리, 티커 아님**) · 모의 포트 17070 | SDK 문서 |
 | GIC | 종목마스터 `m_gtsstock`(티커→GIC, 미국 소수점 매매 가능 여부 포함) | SDK 헤더 |
 
-### 1.4 🔴 미확인 항목 (실운영을 막고 있는 것)
+### 1.4 🔴 미확인 항목 → v1.1: 공식 명세로 기본값 확보, 모의 실측 1회만 남음
 
-| # | 항목 | 설정 위치 | 확인 방법 | 미설정 시 동작 |
-|---|---|---|---|---|
-| 1 | 국내 주문 응답의 **주문번호 필드** | `broker_fields.yaml` `order_no_field` | `mock_smoke.py --send 005930 1` | 모든 주문 결과 UNKNOWN |
-| 2 | 국내 **잔고 필드**(목록·종목·수량·평균단가) | `broker_fields.yaml` | `mock_smoke.py` 잔고 원문 | 잔고 대조 꺼짐, 실거래 시작 거부 |
-| 3 | 국내 **실시간 체결가 필드**(가격·체결수량) | `feed.yaml` | `capture_feed.py 005930`(장중) | 운영 시작 거부 |
-| 4 | **미국 매도 주문 경로** | `broker_fields.yaml` `us.sell_path` | NH 포털 명세 | **미국 주문 전체 비활성** |
-| 5 | 미국 잔고 필드 | `broker_fields.yaml` `us.*` | 해외 잔고 원문 | 미국 운영 시작 거부 |
-| 6 | 미국 실시간 필드 | `feed.yaml` `us_*` | `capture_feed.py AAPL --us`(미국 장중) | 미국 운영 시작 거부 |
-| 7 | Grok 응답 형식·모델명·실제 비용 | `research.yaml` | `grok_ping.py` | 리서치 실패 → 논지 없음 → 매매 없음 |
-| 8 | Jev API 키 확보 | `.env` | `jev_ping.py` | Jev 실패 → HOLD |
-| 9 | 주문 취소 API · 체결통보(d2) 필드 · 미국 소수점 주문 | — | 포털 명세 | 시장가 주문·잔고 대조로 대체, 정수 주만 |
+NH 공식 MCP 저장소([nhplug-mcp](https://github.com/PLUG-OpenAPI/nhplug-mcp) `specs/`)의 openapi 명세로 필드 기본값을 채웠다(F1).
+모의 운영은 바로 가능하고, **승격 심사·실거래는 `verified_by_mock: true`** 가 돼야 열린다.
+`scripts/check_all.py --send --apply` 가 실측 확인 후 자동으로 바꾼다.
+
+| # | 항목 | 명세 기본값 | 상태 |
+|---|---|---|---|
+| 1 | 주문번호 | 국내 `Output_0.mkt_orr_no` · 미국 `orr_no` | 실측 확인 대기 |
+| 2 | 국내 잔고 | `Output_1[]` · `iem_cd` · `itg_bnc_qty` · `phs_pr` | **수량 필드 후보 2개**(`rsdl_qty`) → 실측 확정 |
+| 3 | 국내 실시간(mc) | `price` · `movolume`(체결 1건 수량) | 실측 확인 대기 |
+| 4 | 미국 매도 경로 | `/gbstock/order/v1/sell` | P4 보류 |
+| 5 | 미국 잔고 | `Output_1[]` · `iem_cd` · `cns_bse_bnc_qty` · `fc_avg_phs_pr` (+ 환율 `tdt_sby_bse_xcg_rt`) | P4 보류 |
+| 6 | 미국 실시간(RC) | `trdprc_1z17` · `fill_sizez15` | P4 보류 |
+| 7 | 응답 메시지 위치 | 명세 `message.usr_msg` / SDK `rsp_msg` → **둘 다 기록** | 반영 |
+| 8 | Grok 응답 형식·비용 | — | `grok_ping.py` |
+| 9 | Jev 키 | — | `jev_ping.py` |
+| 10 | 취소 API · 체결통보(d2) | 명세 확인(`/order/v1/cancel` · `concprc` 체결가) | 미구현(F2·F3 후보) |
 
 모든 미확인 항목은 **"설정이 비면 안전한 쪽(매매 안 함)으로 실패"** 하도록 구현돼 있다.
 
@@ -89,8 +95,10 @@ v0.2 → v1.0 주요 변경:
 │                                                    논지(TTL) ▼         │
 └──────────────────────────────────────── data/theses.sqlite ───────────┘
                                                      │ (60초마다 재로드)
-┌─ 매매 프로세스 (run_mock.py / run_live.py) — 정책별 1개 ──────────────────┐
-│ 열린 시장 1개만 구독(국내 mc / 미국 RC)                                   │
+┌─ 매매 프로세스 (run_mock.py / run_live.py) — 1개, 정책 레인 여러 개 ───────┐
+│ 열린 시장 1개만 구독(국내 mc / 미국 RC) · 시세를 모든 레인이 공유(F9)       │
+│   레인 1 Jev  → NH 모의/실계좌   + 섀도 판단(매 분 Jev 기록, F4)            │
+│   레인 2 비교군 → 메모리 모의체결(같은 시세, 슬리피지 10bp 가정)             │
 │   틱 ─▶ 1분봉 ─▶ 지표(코드) ─▶ 정책(Jev 또는 비교군) ─▶ 진입 신호        │
 │                                                        ▼                 │
 │              리스크 게이트(결정론적) ─▶ 시장가 주문(PLUG) ─▶ 결과         │
@@ -104,6 +112,8 @@ v0.2 → v1.0 주요 변경:
 **설계 이유**
 - **2-속도:** Grok은 느리고(수십 초) 비싸서 장중 분 단위 판단에 부적합. Jev는 빠르지만 스스로 정보를 찾지 않음 → 맥락(논지)은 Grok이 미리 만든다.
 - **논지 공유 저장소:** Jev 정책과 비교군이 **같은 논지**를 읽어야 비교가 공정하고, Grok 비용도 한 번만 든다.
+- **단일 프로세스 다중 정책(F9):** NH 웹소켓은 앱키당 세션 2개가 한도다. 또 두 정책이 **같은 계좌**로 주문하면 잔고 대조에서 서로의 보유분이 섞여 정지한다 → 브로커 주문은 Jev 레인만, 비교군은 같은 시세로 메모리 모의체결.
+- **섀도 판단(F4):** 주문과 무관하게 매 1분봉 Jev 판단을 기록해 보정 표본을 늘린다. 실제 판단이 있던 봉은 건너뛰고, 논지 없는 섀도 전용 종목(기본 SK하이닉스·NAVER)은 `has_thesis=false` 로 분리 집계한다. 하루 1,200회·월 3,000원 상한.
 - **시장 교대 단일 프로세스:** 국내(09:00–15:30)와 미국(23:30–06:00 KST)은 겹치지 않는다. 한 프로세스가 번갈아 운영해야 일일·총 손실 장부를 공유할 수 있다.
 
 ---
@@ -142,7 +152,7 @@ v0.2 → v1.0 주요 변경:
 | `config/*.yaml` | risk · risk.live · strategy · research · promotion · feed · broker_fields · fx |
 | `scripts/` | 점검(`*_ping`, `mock_smoke`, `capture_feed`), 운영(`run_*`), 관리(`report`, `promotion_check`, `resolve_pending`, `resume`) |
 
-테스트 104개(`pytest`) — 외부 API는 모두 가짜 응답으로 검증. **실서버 연결 검증은 아직 없음.**
+테스트 117개(`pytest`) — 외부 API는 모두 가짜 응답으로 검증. **실서버 연결 검증은 아직 없음.**
 
 ---
 
@@ -293,17 +303,12 @@ MA20 위 + 15분 수익률 > 0 + 거래량 비율 ≥ 1.2 → 고정 신뢰도 0
 ## 11. 운영 절차
 
 ```bash
-# 0) 연결 확인 (현재 단계)
-python scripts/jev_ping.py
-python scripts/grok_ping.py
-python scripts/mock_smoke.py --send 005930 1      # → broker_fields.yaml
-python scripts/capture_feed.py 005930              # 국내 장중 → feed.yaml
-python scripts/capture_feed.py AAPL --us           # 미국 장중 → feed.yaml us_*
+# 0) 연결 확인 (현재 단계) — 국내 장중, 한 번에
+python scripts/check_all.py --send --apply   # 계좌·주문번호·잔고·실시간·Jev·Grok, 통과 시 verified_by_mock=true
 
-# 1) P2 모의 운영 (프로세스 3개)
+# 1) P2 모의 운영 (프로세스 2개)
 python scripts/run_research.py
-python scripts/run_mock.py data/theses.sqlite --send
-python scripts/run_mock.py data/theses.sqlite --send --policy baseline
+python scripts/run_mock.py data/theses.sqlite --send     # Jev(모의계좌) + 비교군(메모리) + 섀도
 
 # 2) 점검
 python scripts/report.py data/audit-jev.sqlite data/audit-baseline.sqlite
@@ -311,7 +316,7 @@ python scripts/promotion_check.py
 
 # 3) 실거래 (심사 통과 시에만 시작됨)
 python scripts/run_live.py data/theses.sqlite          # P3
-python scripts/run_live.py data/theses.sqlite --p4     # P4
+python scripts/run_live.py data/theses.sqlite --p4     # P4 (D1 보류: promotion.yaml p4_enabled)
 
 # 비상
 touch data/KILL
@@ -341,11 +346,11 @@ python scripts/resume.py <db> "정지 원인과 조치"
 
 | 단계 | 코드 | 운영 | 다음 행동 |
 |---|---|---|---|
-| P0 리스크·브로커·스키마 | ✅ | ⏳ 연결 확인 대기 | §11-0 실행 결과 → 필드 확정 |
+| P0 리스크·브로커·스키마 | ✅ | ⏳ 연결 확인 대기 | `check_all.py --send --apply` 1회 (F5 연결 시 제가 실행) |
 | P1 국내 빠른 루프 | ✅ | ⏸ | P0 완료 후 |
 | P2 Grok 리서치 + 모의 6주 | ✅ | ⏸ | 승격 심사 자동 |
 | P3 국내 실거래 20만원 | ✅ (심사 잠금) | ⏸ | P2 심사 통과 |
-| P4 국내+미국 50만원 | ✅ (심사 잠금) | ⏸ | P3 심사 통과 + 미국 미확인 항목 해소 |
+| P4 국내+미국 50만원 | ✅ (심사 잠금) | **보류(D1)** | 국내 성과 확인 후 `p4_enabled: true` 로 재개 검토 |
 
 남은 개발 후보(실측 이후): 체결통보(d2) 연동으로 정확한 체결가 · 주문 취소 API · 휴장일 캘린더 · 지수 벤치마크 · 미국 소수점 주문 · 환율 자동 조회.
 

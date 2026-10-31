@@ -3,7 +3,7 @@
     python scripts/mock_smoke.py                    # 계좌·잔고 조회, 주문 payload 확인
     python scripts/mock_smoke.py --send 005930 1    # 모의투자로 1주 시장가 매수 전송
 
---send 의 응답 원문에서 주문번호 필드명을 확인해 NHPlugBroker(order_no_field=...) 에 넣는다.
+일괄 점검은 scripts/check_all.py 를 쓴다(필드 자동 판정·verified_by_mock 갱신).
 """
 from __future__ import annotations
 

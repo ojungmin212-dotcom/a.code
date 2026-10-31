@@ -62,10 +62,16 @@ def _bar_index(audit: AuditLog) -> dict[str, tuple[list[datetime], list[float]]]
     return out
 
 
-def jev_calibration(audit: AuditLog, horizon_min: int = 15) -> Calibration:
+def jev_calibration(audit: AuditLog, horizon_min: int = 15,
+                    has_thesis: bool | None = None) -> Calibration:
+    """실제 판단(decision)과 섀도 판단(shadow)을 함께 쓴다. has_thesis 로 논지 유무별 분리 가능."""
     bars = _bar_index(audit)
     pairs: list[tuple[float, int]] = []
-    for e in audit.events("decision"):
+    events = audit.events("decision") + audit.events("shadow")
+    for e in events:
+        with_thesis = e["payload"].get("has_thesis", True)
+        if has_thesis is not None and with_thesis != has_thesis:
+            continue
         d = e["payload"].get("detail") or {}
         answers = d.get("answers")
         if not answers or e["symbol"] not in bars:

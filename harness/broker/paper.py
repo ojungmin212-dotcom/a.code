@@ -12,13 +12,14 @@ from .base import Guard, IdempotencyGuard
 
 class PaperBroker:
     def __init__(self, cash_krw: Decimal, fee_pct: dict[Market, Decimal] | None = None,
-                 guard: Guard | None = None):
+                 guard: Guard | None = None, slippage_bps: Decimal = Decimal(0)):
         self.cash_krw = cash_krw
         self.fee_pct = fee_pct or {Market.KR: Decimal("0.015"), Market.US: Decimal("0.09")}
         self._prices: dict[tuple[Market, str], Decimal] = {}
         self._fx: dict[Market, Decimal] = {Market.KR: Decimal(1), Market.US: Decimal(1400)}
         self._pos: dict[tuple[Market, str], tuple[int, Decimal]] = {}
         self._guard = guard or IdempotencyGuard()
+        self.slippage_bps = Decimal(slippage_bps)
 
     def set_price(self, market: Market, symbol: str, price: Decimal) -> None:
         self._prices[(market, symbol)] = price
@@ -37,7 +38,10 @@ class PaperBroker:
             crosses = last <= req.limit_price if req.side is Side.BUY else last >= req.limit_price
             if not crosses:
                 return self._reject(req, "지정가 미도달(모의 브로커는 미체결 주문을 보관하지 않음)")
+        slip = last * self.slippage_bps / 10_000  # 시장가는 불리한 방향으로 체결된다고 가정
         price = last
+        if req.order_type is OrderType.MARKET:
+            price = last + slip if req.side is Side.BUY else last - slip
         fx = self._fx[req.market]
         gross = price * req.quantity * fx
         fee = gross * self.fee_pct[req.market] / 100

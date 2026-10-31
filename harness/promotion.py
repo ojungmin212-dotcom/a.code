@@ -33,6 +33,7 @@ class PromotionCriteria(BaseModel):
     min_jev_skill: float
     min_calibration_samples: int = Field(ge=0)
     p4: P4Criteria
+    p4_enabled: bool = False  # D1
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PromotionCriteria:

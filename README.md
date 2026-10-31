@@ -1,5 +1,17 @@
 # a.code — Grok + Jev 장중 매매 하네스
 
+## 빠른 시작 (v1.1)
+```bash
+pip install -e ".[dev]" && pytest
+cp .env.example .env                              # 키·모의계좌 입력
+python scripts/check_all.py --send --apply        # 국내 장중: 연결·필드 일괄 점검
+python scripts/run_research.py                    # 창 1: Grok 리서치
+python scripts/run_mock.py data/theses.sqlite --send   # 창 2: Jev(모의계좌) + 비교군(메모리) + 섀도
+python scripts/report.py data/audit-jev.sqlite data/audit-baseline.sqlite
+```
+- 계좌 상태를 대화로 확인: [docs/nhplug-mcp.md](docs/nhplug-mcp.md) (K1)
+- 미국(P4)은 보류 중(D1) — `config/promotion.yaml` `p4_enabled`
+
 설계: [docs/harness-design.md](docs/harness-design.md)
 
 ## P0 구성 (현재)

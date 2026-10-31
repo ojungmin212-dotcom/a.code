@@ -1,8 +1,8 @@
-# 실시간 체결가(mc) 푸시 본문 필드명. scripts/capture_feed.py 결과를 보고 채운다.
-# 비어 있으면 scripts/run_mock.py 가 시작을 거부한다.
-price_field: null
-volume_field: null   # 체결 1건의 수량(누적거래량 아님)
-
-# 미국 실시간 체결가(RC) — tr_key 는 GIC 15자리(종목마스터 m_gtsstock 에서 자동 변환)
-us_price_field: null
-us_volume_field: null
+# 실시간 체결가 푸시 본문 필드명 — NH 공식 명세 x-realtime-channels 기준 기본값.
+# 국내 mc: price(현재가), movolume(체결 1건 수량; volume 은 누적거래량이라 쓰면 안 됨)
+# 미국 RC: trdprc_1z17(체결가), fill_sizez15(체결 1건 수량)
+verified_by_mock: false
+price_field: price
+volume_field: movolume
+us_price_field: trdprc_1z17
+us_volume_field: fill_sizez15

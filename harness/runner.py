@@ -1,8 +1,10 @@
 """장중 운영 루프(모의·실거래, 국내·미국 공용).
 
-국내(09:00–15:30 KST)와 미국(23:30–06:00 KST, 서머타임 시 1시간 앞당김) 정규장은 겹치지 않으므로
-한 프로세스가 열린 시장 하나만 구독한다. 손실 한도 장부를 시장끼리 공유하기 위해서다.
-국내만 운영하면 장 마감 후 종료, 두 시장을 운영하면 상주한다.
+- 한 프로세스가 **시세 피드 하나를 여러 정책(레인)이 공유**한다(F9). NH 웹소켓은 앱키당 세션 2개가
+  한도라 정책별 프로세스를 띄우면 한도를 다 쓴다.
+- 브로커로 주문하는 레인은 하나뿐이다. 같은 계좌를 두 정책이 쓰면 잔고 대조에서 서로의 보유분이 섞인다.
+  나머지 레인(비교군)은 같은 시세로 메모리 모의 체결(PaperBroker)한다.
+- 국내(09:00–15:30 KST)와 미국(23:30–06:00 KST) 정규장은 겹치지 않으므로 열린 시장 하나만 구독한다.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from harness.broker.nhplug_broker import NHPlugBroker
+from harness.broker.paper import PaperBroker
 from harness.engine import TradingEngine
 from harness.market.bars import BarAggregator
 from harness.market.nh_feed import FeedFields, NHTickFeed
@@ -26,16 +29,27 @@ from harness.risk import SESSIONS
 @dataclass
 class MarketSpec:
     market: Market
-    symbols: list[str]
+    symbols: list[str]                           # 구독 종목(매매 대상 + 섀도 전용)
     fields: FeedFields
     tr_cd: str                                   # 국내 mc / 미국 RC
     keys: dict[str, str] = field(default_factory=dict)  # 종목 → 구독키(미국: GIC)
+    tradable: list[str] = field(default_factory=list)   # 매매 대상(잔고 대조 범위)
+
+
+@dataclass
+class Lane:
+    engine: TradingEngine
+    broker: NHPlugBroker | PaperBroker
+
+    @property
+    def is_paper(self) -> bool:
+        return isinstance(self.broker, PaperBroker)
 
 
 @dataclass
 class LoopConfig:
     specs: list[MarketSpec]
-    kill_file: Path               # 이 파일이 생기면 즉시 정지 + 전량 청산
+    kill_file: Path               # 이 파일이 생기면 모든 레인 정지 + 전량 청산
     reconcile_every_sec: float = 5.0
     repo: ThesisRepo | None = None
     fx_source: Callable[[datetime], dict[Market, Decimal]] | None = None
@@ -45,39 +59,53 @@ class LoopConfig:
         return [f"{s.market.value}:{x}" for s in self.specs for x in s.symbols]
 
 
-def run_loop(engine: TradingEngine, broker: NHPlugBroker, cfg: LoopConfig) -> None:
-    scope = {(s.market, x) for s in cfg.specs for x in s.symbols}
+def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
+    if sum(not ln.is_paper for ln in lanes) > 1:
+        raise ValueError("브로커로 주문하는 레인은 하나만 둘 수 있습니다(같은 계좌 잔고 혼선)")
+    scope = {(s.market, x) for s in cfg.specs for x in (s.tradable or s.symbols)}
     agg = BarAggregator()
     feeds: dict[Market, NHTickFeed] = {}
     last_slow = last_reconcile = datetime.fromtimestamp(0, timezone.utc)
 
     while True:
         now = datetime.now(timezone.utc)
-        if cfg.kill_file.exists() and not engine.gate.ledger.halted:
-            engine.gate.ledger.halt(f"수동 킬 스위치({cfg.kill_file.name})")
-            engine._halted_now(now)
-        if engine.gate.ledger.halted:
-            engine._exit_all("halt", now)
+        for ln in lanes:
+            e = ln.engine
+            if cfg.kill_file.exists() and not e.gate.ledger.halted:
+                e.gate.ledger.halt(f"수동 킬 스위치({cfg.kill_file.name})")
+                e._halted_now(now)
+            if e.gate.ledger.halted:
+                e._exit_all("halt", now)
 
         if (now - last_slow).total_seconds() >= 60:
-            if cfg.repo:
-                engine.theses = cfg.repo.store()
-            if cfg.fx_source:
-                engine.set_fx(cfg.fx_source(now), now)
+            store = cfg.repo.store() if cfg.repo else None
+            rates = cfg.fx_source(now) if cfg.fx_source else None
+            for ln in lanes:
+                if store is not None:
+                    ln.engine.theses = store
+                if rates is not None:
+                    ln.engine.set_fx(rates, now)
+                    if ln.is_paper:
+                        for m, r in rates.items():
+                            ln.broker.set_fx(m, r)
             last_slow = now
-        if broker.balance_fields and (now - last_reconcile).total_seconds() >= cfg.reconcile_every_sec:
-            try:
-                engine.reconcile(broker.holdings(), now, scope)
-            except Exception as e:  # 잔고 조회 실패는 기록만 하고 다음 주기에 재시도
-                engine.audit.record("reconcile_error", {"error": str(e)}, ts=now)
+        if (now - last_reconcile).total_seconds() >= cfg.reconcile_every_sec:
+            for ln in lanes:
+                if not ln.is_paper and ln.broker.balance_fields:
+                    try:
+                        ln.engine.reconcile(ln.broker.holdings(), now, scope)
+                    except Exception as e:  # 잔고 조회 실패는 기록만 하고 다음 주기에 재시도
+                        ln.engine.audit.record("reconcile_error", {"error": str(e)}, ts=now)
             last_reconcile = now
 
         open_specs = [s for s in cfg.specs if SESSIONS[s.market].is_open(now)]
         if not open_specs:
-            engine.flatten_if_due(now)
+            for ln in lanes:
+                ln.engine.flatten_if_due(now)
             all_done = all(SESSIONS[s.market].minutes_to_close(now) < 0 for s in cfg.specs)
-            if all_done and not engine.positions and not engine.pending:
-                engine.notify("장 마감 — 종료")
+            busy = any(ln.engine.positions or ln.engine.pending for ln in lanes)
+            if all_done and not busy:
+                lanes[0].engine.notify("장 마감 — 종료")
                 return
             time.sleep(5)
             continue
@@ -92,9 +120,13 @@ def run_loop(engine: TradingEngine, broker: NHPlugBroker, cfg: LoopConfig) -> No
         try:
             tick = feed.ticks.get(timeout=1.0)
         except queue.Empty:
-            engine.flatten_if_due(now)
+            for ln in lanes:
+                ln.engine.flatten_if_due(now)
             continue
         bar = agg.add(tick)
-        if bar is not None:
-            engine.on_bar(bar, tick.ts)
-        engine.flatten_if_due(now)
+        for ln in lanes:
+            if ln.is_paper:
+                ln.broker.set_price(tick.market, tick.symbol, tick.price)
+            if bar is not None:
+                ln.engine.on_bar(bar, tick.ts)
+            ln.engine.flatten_if_due(now)

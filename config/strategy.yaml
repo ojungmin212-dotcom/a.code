@@ -12,3 +12,14 @@ jev:
 baseline:
   min_volume_ratio: 1.2
   confidence: 0.70           # 리스크 게이트 통과용 고정값
+# 섀도 판단(F4): 주문과 무관하게 매 1분봉 Jev 판단을 기록 → 보정 표본 확대. Grok 비용 없음.
+# 비용 추정: 호출당 입력 약 1,500토큰 x $0.042/백만 ≈ 0.09원. 하루 1,200회 ≈ 110원, 월 약 2,400원.
+shadow:
+  enabled: true
+  extra_symbols: {KR: ["000660", "035420"]}   # 섀도 전용(매매 안 함): SK하이닉스, NAVER
+  max_calls_per_day: 1200
+  monthly_budget_krw: 3000
+  usd_krw: 1400
+  usd_per_m_input_tokens: 0.042
+# 비교군(브로커 미사용, 메모리 모의 체결)에 적용할 불리한 체결 가정(bp). Jev 실측 슬리피지로 교체할 것.
+paper_slippage_bps: 10

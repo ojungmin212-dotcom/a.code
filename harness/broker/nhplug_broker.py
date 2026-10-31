@@ -5,8 +5,8 @@
    운영 주문은 allow_live=True 와 환경변수 HARNESS_ALLOW_LIVE=I_ACCEPT_REAL_MONEY 가 모두 있어야 한다.
 2. **dry_run 기본값 True.** 전송하지 않고 payload 만 돌려준다.
 3. **성공 판정을 HTTP 200 으로 하지 않는다.** SDK 규약상 rsp_cd 비교도 금지.
-   응답 Output_0 에서 주문번호 필드(order_no_field)를 확인해야만 ACCEPTED. 그 외는 UNKNOWN.
-   ⚠️ 주문번호 필드명은 아직 확인하지 못했다 → 모의투자 첫 주문 응답(scripts/mock_smoke.py)으로 확정할 것.
+   응답 Output_0 에서 주문번호 필드(order_no_fields 중 하나)를 확인해야만 ACCEPTED. 그 외는 UNKNOWN.
+   필드명은 NH 공식 명세 기준(국내 mkt_orr_no · 미국 orr_no) — scripts/check_all.py 로 실측 확인.
 4. **UNKNOWN·네트워크 오류는 자동 재시도하지 않는다.** 이미 접수됐을 수 있어 중복 주문이 된다.
 5. **미국 주식은 매도 경로(us.sell_path)가 설정돼야만 매수도 허용.** SDK 샘플에 해외 매도 경로가 없어
    모의투자로 확인해 config/broker_fields.yaml 에 넣어야 한다. 청산 못 하는 포지션을 여는 것을 막는다.
@@ -52,6 +52,18 @@ class UsConfig:
     nation_code: str = "200"            # 200 = 미국
 
 
+def server_message(data: Any) -> str | None:
+    """서버 메시지. SDK 문서는 rsp_msg, 공식 명세는 message.usr_msg — 둘 다 본다(판정용 아님, 기록용)."""
+    if not isinstance(data, dict):
+        return None
+    m = data.get("message")
+    parts = [data.get("rsp_msg")]
+    if isinstance(m, dict):
+        parts += [m.get("usr_msg"), m.get("msg_code")]
+    text = " | ".join(str(x) for x in parts if x)
+    return text or None
+
+
 def _num(v: Any) -> Decimal:
     return Decimal(str(v).replace(",", "").strip() or "0")
 
@@ -62,7 +74,7 @@ def _host(base_url: str) -> str:
 
 class NHPlugBroker:
     def __init__(self, account_no: str, *, dry_run: bool = True, allow_live: bool = False,
-                 order_no_field: str | None = None,
+                 order_no_field: str | tuple[str, ...] | list[str] | None = None,
                  call: Callable[..., Any] | None = None,
                  base_url: Callable[[], str] | None = None,
                  guard: Guard | None = None,
@@ -77,7 +89,9 @@ class NHPlugBroker:
         self.account_no = account_no
         self.dry_run = dry_run
         self.allow_live = allow_live
-        self.order_no_field = order_no_field
+        if isinstance(order_no_field, str):
+            order_no_field = (order_no_field,)
+        self.order_no_fields = tuple(order_no_field or ())
         self._call = call
         self._base_url = base_url
         self._guard = guard or IdempotencyGuard()
@@ -163,12 +177,16 @@ class NHPlugBroker:
         if not isinstance(data, dict):
             return OrderResult(client_order_id=cid, status=OrderStatus.UNKNOWN,
                                message=f"예상치 못한 응답: {str(data)[:200]}")
-        msg = data.get("rsp_msg")
+        msg = server_message(data)
         out = data.get("Output_0")
         row = out[0] if isinstance(out, list) and out else out
         order_no = None
-        if self.order_no_field and isinstance(row, dict):
-            order_no = str(row.get(self.order_no_field) or "").strip() or None
+        if isinstance(row, dict):
+            for f in self.order_no_fields:
+                v = str(row.get(f) or "").strip()
+                if v and v.strip("0"):  # 0 / 빈 값은 주문번호가 아님
+                    order_no = v
+                    break
         status = OrderStatus.ACCEPTED if order_no else OrderStatus.UNKNOWN
         return OrderResult(client_order_id=cid, status=status, broker_order_id=order_no,
                            message=msg, raw=data)
@@ -194,8 +212,8 @@ class NHPlugBroker:
     @staticmethod
     def _parse_holdings(data: Any, f: BalanceFields, market: Market) -> dict[tuple[Market, str], tuple[int, Decimal]]:
         if not isinstance(data, dict) or f.holdings_list not in data:
-            msg = data.get("rsp_msg") if isinstance(data, dict) else data
-            raise RuntimeError(f"{market} 잔고 응답에 {f.holdings_list} 없음: rsp_msg={msg}")
+            msg = server_message(data) if isinstance(data, dict) else data
+            raise RuntimeError(f"{market} 잔고 응답에 {f.holdings_list} 없음: {msg}")
         rows = data[f.holdings_list] or []
         rows = rows if isinstance(rows, list) else [rows]
         out: dict[tuple[Market, str], tuple[int, Decimal]] = {}

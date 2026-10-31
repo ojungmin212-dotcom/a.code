@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from harness.audit import AuditLog  # noqa: E402
-from harness.bootstrap import StartupBlocked, assemble, fields_ready  # noqa: E402
+from harness.bootstrap import StartupBlocked, assemble, fields_ready, p4_enabled  # noqa: E402
 from harness.models import Market, OrderType  # noqa: E402
 from harness.promotion import PromotionCriteria, evaluate, evaluate_p4  # noqa: E402
 from harness.runner import run_loop  # noqa: E402
@@ -35,6 +35,8 @@ def main() -> None:
     if len(args) != 1:
         sys.exit(__doc__)
     markets = (Market.KR, Market.US) if p4 else (Market.KR,)
+    if p4 and not p4_enabled():
+        sys.exit("미국(P4)은 보류 중입니다(D1). config/promotion.yaml 의 p4_enabled 참고")
     criteria = PromotionCriteria.from_yaml(ROOT / "config" / "promotion.yaml")
     now = datetime.now(timezone.utc)
 
@@ -55,25 +57,28 @@ def main() -> None:
             sys.exit("P4 승격 기준 미달 — 국내만 운영하려면 --p4 없이 실행하세요.")
 
     try:
-        asm = assemble(mode="live", theses_path=args[0], policy_name="jev",
-                       risk_file="risk.yaml" if p4 else "risk.live.yaml", send=True,
-                       audit_name="audit-live.sqlite", entry_order_type=OrderType.MARKET,
-                       markets=markets, allow_live=True)
+        # Jev 만 실계좌로 주문, 비교군은 같은 시세로 메모리 모의체결(실거래 중에도 비교 지속)
+        asm = assemble(mode="live", theses_path=args[0], policies=["jev", "baseline"],
+                       broker_policy="jev", risk_file="risk.yaml" if p4 else "risk.live.yaml",
+                       send=True, entry_order_type=OrderType.MARKET, markets=markets,
+                       allow_live=True, audit_names={"jev": "audit-live.sqlite",
+                                                     "baseline": "audit-live-baseline.sqlite"})
     except StartupBlocked as e:
         sys.exit(f"시작 거부: {e}")
     # LiveTradingBlocked(운영 서버 아님/환경변수 없음)는 assemble 안에서 그대로 올라온다.
-    if asm.broker.is_mock():
+    live = asm.broker_lane
+    if live.broker.is_mock():
         sys.exit("실거래는 운영 서버(api.)에서만 실행합니다")
-    if asm.broker.balance_fields is None:
+    if live.broker.balance_fields is None:
         sys.exit("잔고 필드 미설정 — 체결 확인 없이 실거래할 수 없습니다")
 
-    limits = asm.engine.gate.limits
+    limits = live.engine.gate.limits
     print(f"\n실거래 한도: 자본 {limits.initial_capital_krw:,}원 · 총손실 {limits.max_total_loss_krw:,}원 · "
           f"일일 {limits.max_daily_loss_krw:,}원 · 1회 {limits.max_loss_per_trade_krw:,}원 · 종목 {asm.loop.symbols}")
     if input(f"계속하려면 '{CONFIRM}' 을 입력: ").strip() != CONFIRM:
         sys.exit("취소")
-    asm.engine.notify("실거래 시작")
-    run_loop(asm.engine, asm.broker, asm.loop)
+    live.engine.notify("실거래 시작")
+    run_loop(asm.lanes, asm.loop)
 
 
 if __name__ == "__main__":

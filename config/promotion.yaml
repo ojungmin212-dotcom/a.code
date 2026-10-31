@@ -15,3 +15,6 @@ p4:
   min_us_mock_weeks: 4
   min_us_mock_trades: 30
   require_us_mock_positive_pnl: true
+
+# D1: 미국(P4)은 로드맵에서 보류. true 로 바꿔야 미국 모의·실거래가 시작된다.
+p4_enabled: false

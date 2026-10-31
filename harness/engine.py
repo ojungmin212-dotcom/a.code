@@ -15,6 +15,7 @@ from decimal import Decimal
 from harness.audit import AuditLog
 from harness.broker.base import Broker, DuplicateOrderError
 from harness.decision.policy import DecisionContext, Policy
+from harness.decision.shadow import ShadowObserver
 from harness.market.bars import Bar
 from harness.market.indicators import compute_indicators
 from harness.models import (
@@ -52,7 +53,8 @@ class TradingEngine:
                  min_bars: int, audit: AuditLog | None = None,
                  fx_rates: dict[Market, Decimal] | None = None, history: int = 120,
                  entry_order_type: OrderType = OrderType.LIMIT,
-                 notify: Callable[[str], None] | None = None):
+                 notify: Callable[[str], None] | None = None,
+                 shadow: ShadowObserver | None = None):
         self.gate, self.broker, self.policy, self.theses = gate, broker, policy, theses
         self.min_bars = min_bars
         self.audit = audit or AuditLog()
@@ -62,6 +64,8 @@ class TradingEngine:
         self.pending: dict[Key, PendingOrder] = {}
         self.entry_order_type = entry_order_type
         self._last_exit_try: dict[Key, datetime] = {}
+        self.shadow = shadow
+        self._decided = False
         self.notify = notify or (lambda msg: None)
         self._bars: dict[Key, deque[Bar]] = {}
         self._history = history
@@ -89,6 +93,24 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ 메인 루프
     def on_bar(self, bar: Bar, now: datetime) -> None:
+        self._decided = False
+        self._step(bar, now)
+        if self.shadow is not None and not self._decided:
+            self._observe_shadow((bar.market, bar.symbol), now)
+
+    def _observe_shadow(self, key: Key, now: datetime) -> None:
+        bars = list(self._bars[key])
+        if len(bars) < self.min_bars:
+            return
+        market, symbol = key
+        thesis = self.theses.active(market, symbol, now)
+        ctx = DecisionContext(market=market, symbol=symbol, now=now,
+                              thesis=thesis or ShadowObserver.placeholder_thesis(market, symbol, now),
+                              bars=bars, indicators=compute_indicators(bars),
+                              fx_rate_krw=self.fx.get(market, Decimal(1)))
+        self.shadow.observe(ctx, thesis is not None, now)
+
+    def _step(self, bar: Bar, now: datetime) -> None:
         key = (bar.market, bar.symbol)
         hist = self._bars.setdefault(key, deque(maxlen=self._history))
         hist.append(bar)
@@ -178,6 +200,7 @@ class TradingEngine:
         ctx = DecisionContext(market=market, symbol=symbol, now=now, thesis=thesis, bars=bars,
                               indicators=compute_indicators(bars), fx_rate_krw=self.fx[market])
         decision = self.policy.decide(ctx)
+        self._decided = True
         self.audit.record("decision", {"policy": self.policy.name, "reason": decision.reason,
                                        "signal": decision.signal, "detail": decision.detail},
                           market=market.value, symbol=symbol, ts=now)

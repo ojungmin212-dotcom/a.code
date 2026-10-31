@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "nhplug": {
+      "command": "npx",
+      "args": ["-y", "github:PLUG-OpenAPI/nhplug-mcp"],
+      "env": {
+        "NHPLUG_APP_KEY": "${NHPLUG_APP_KEY}",
+        "NHPLUG_APP_SECRET": "${NHPLUG_APP_SECRET}",
+        "NHPLUG_BASE_URL": "https://moapi.nhplug.com:8443",
+        "NHPLUG_DEFAULT_ACCOUNT": "${NHPLUG_DEFAULT_ACCOUNT}",
+        "NHPLUG_ENABLE_TRADING": "false"
+      }
+    }
+  }
+}

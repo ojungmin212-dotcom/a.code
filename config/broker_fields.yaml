@@ -1,15 +1,19 @@
-# 나무 PLUG 국내 잔고(/krstock/inquiry/v1/balance) 응답 필드명. mock_smoke.py 의 잔고 원문을 보고 채운다.
-# 하나라도 비어 있으면 잔고 대조가 꺼지고, 실거래(run_live.py)는 시작을 거부한다.
-order_no_field: null      # 주문 응답 Output_0 의 주문번호
-holdings_list: null       # 보유종목 목록이 들어 있는 키 (예: Output_1)
-symbol_field: null        # 종목코드
-quantity_field: null      # 보유수량
-avg_price_field: null     # 평균매입단가
+# 나무 PLUG 응답 필드명 — NH 공식 openapi 명세(PLUG-OpenAPI/nhplug-mcp specs/, 2026-10 확인) 기준 기본값.
+# verified_by_mock: 모의투자 실측으로 확인했으면 true. 모의 운영은 false 여도 되지만,
+#                   승격 심사·실거래는 true 여야 시작된다(scripts/check_all.py 가 자동 판정).
+verified_by_mock: false
 
-# 미국(P4). sell_path 가 비어 있으면 미국 주문 전체 비활성(매수 포함).
+order_no_fields: [mkt_orr_no, orr_no]   # 국내 Output_0.mkt_orr_no · 미국 Output_0.orr_no
+holdings_list: Output_1
+symbol_field: iem_cd
+quantity_field: itg_bnc_qty    # 통합잔고수량. 후보: rsdl_qty(잔량수량) — 실측으로 확정
+avg_price_field: phs_pr        # 매입가격
+
+# 미국(P4 — 현재 보류, D1)
 us:
-  sell_path: null         # 해외 매도 주문 경로 — SDK 샘플에 없음. 포털 명세/모의투자로 확인
-  holdings_list: Output_1 # SDK 샘플 docstring 기준(보유종목 배열)
-  symbol_field: null
-  quantity_field: null
-  avg_price_field: null
+  sell_path: /gbstock/order/v1/sell
+  holdings_list: Output_1
+  symbol_field: iem_cd
+  quantity_field: cns_bse_bnc_qty   # 체결기준잔고수량
+  avg_price_field: fc_avg_phs_pr    # 외화평균매입가격(USD)
+  fx_field: tdt_sby_bse_xcg_rt      # 당일매매기준환율 (F8 후보)
