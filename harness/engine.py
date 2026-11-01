@@ -59,7 +59,8 @@ class PendingOrder:
     order_type: OrderType = OrderType.MARKET
     filled_qty: int = 0                      # 체결통보(d2) 누적
     filled_value: Decimal = Decimal(0)
-    cancel_sent_at: datetime | None = None
+    cancel_sent_at: datetime | None = None   # 취소가 확인된 시각
+    cancel_attempts: int = 0
 
     def vwap(self) -> Decimal | None:
         return self.filled_value / self.filled_qty if self.filled_qty else None
@@ -70,6 +71,17 @@ def _need(v: T | None) -> T:
     if v is None:
         raise RuntimeError("체결 기록에 필요한 값이 없습니다(브로커 응답 이상)")
     return v
+
+
+def _cancel_confirmed(res: object) -> bool:
+    """취소 응답 확인: dry_run 이거나 응답 Output_0 에 새 주문번호(취소 주문번호)가 있으면 접수된 것으로 본다."""
+    if not isinstance(res, dict):
+        return False
+    if res.get("dry_run"):
+        return True
+    out = res.get("Output_0")
+    out = out[0] if isinstance(out, list) and out else out
+    return isinstance(out, dict) and any(str(out.get(k) or "").strip("0 ") for k in ("mkt_orr_no", "orr_no"))
 
 
 def _norm_order_no(v: object) -> str:
@@ -100,12 +112,19 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ 상태
     def account(self) -> AccountState:
-        return AccountState(
-            cash_krw=max(self.cash_krw, Decimal(0)),
-            positions=tuple(Position(market=m, symbol=s, quantity=p.quantity, avg_price=p.avg_price,
-                                     last_price=p.last, fx_rate_krw=p.fx)
-                            for (m, s), p in self.positions.items()),
-        )
+        """리스크 심사용 계좌 상태. 체결 확정 전 매수(pending BUY)도 보유·현금 예약으로 본다
+        (늦게 체결돼도 동시 보유 한도·현금 한도를 넘지 않도록)."""
+        positions = [Position(market=m, symbol=s, quantity=p.quantity, avg_price=p.avg_price,
+                              last_price=p.last, fx_rate_krw=p.fx)
+                     for (m, s), p in self.positions.items()]
+        reserved = Decimal(0)
+        for (m, s), po in self.pending.items():
+            if po.side is Side.BUY and po.signal is not None and (m, s) not in self.positions:
+                sig = po.signal
+                positions.append(Position(market=m, symbol=s, quantity=po.qty_ordered, avg_price=sig.entry_price,
+                                          last_price=sig.entry_price, fx_rate_krw=sig.fx_rate_krw))
+                reserved += sig.entry_price * po.qty_ordered * sig.fx_rate_krw
+        return AccountState(cash_krw=max(self.cash_krw - reserved, Decimal(0)), positions=tuple(positions))
 
     def resolve_pending(self, market: Market, symbol: str, note: str) -> None:
         """운영자가 브로커 화면/잔고로 확인한 뒤 호출. 실제 체결이 있었다면 장부도 수동 보정해야 한다."""
@@ -123,7 +142,7 @@ class TradingEngine:
     def on_bar(self, bar: Bar, now: datetime) -> None:
         self._decided = False
         self._step(bar, now)
-        if self.shadow is not None and not self._decided:
+        if self.shadow is not None and not self._decided and not self.gate.ledger.halted:
             self._observe_shadow((bar.market, bar.symbol), now)
 
     def _observe_shadow(self, key: Key, now: datetime) -> None:
@@ -282,12 +301,18 @@ class TradingEngine:
                     self.pending.pop(key)
                     self._book_entry(key, _need(po.signal), filled, po.vwap() or avg, now)
                 elif timed_out:
-                    if (po.order_type is OrderType.LIMIT and po.result.broker_order_id
-                            and po.cancel_sent_at is None):
-                        self._cancel(key, po, now)  # 미체결 지정가 잔량 취소 후 다음 주기에 확정
+                    if po.order_type is OrderType.LIMIT and not po.result.broker_order_id:
+                        # 주문번호를 모르는 지정가는 취소할 수 없고, 거래소에 살아 있을 수 있다 → 사람 확인
+                        if not self.gate.ledger.halted:
+                            self.gate.ledger.halt(f"{key[1]} 결과불명 지정가 주문(주문번호 없음) — 수동 확인 필요")
+                            self._halted_now(now)
                         continue
-                    if po.cancel_sent_at and now - po.cancel_sent_at < timedelta(seconds=timeout_sec / 2):
-                        continue
+                    if po.order_type is OrderType.LIMIT:
+                        if po.cancel_sent_at is None:
+                            self._cancel(key, po, now)  # 미체결 지정가 잔량 취소 → 확인된 뒤에만 해소
+                            continue
+                        if now - po.cancel_sent_at < timedelta(seconds=timeout_sec / 2):
+                            continue
                     self.pending.pop(key)
                     if filled > 0:
                         self._book_entry(key, _need(po.signal), filled, po.vwap() or avg, now)
@@ -350,16 +375,24 @@ class TradingEngine:
             self._book_exit(key, po.filled_qty, _need(po.vwap()), po.reason, now)
 
     def _cancel(self, key: Key, po: PendingOrder, now: datetime) -> None:
-        po.cancel_sent_at = now
+        """취소가 확인돼야(cancel_sent_at 세팅) 대기 주문을 해소할 수 있다. 실패하면 다음 주기에 재시도하고,
+        3회 실패하면 정지한다 — 살아 있는 주문을 '미체결'로 지워 버리지 않기 위해서다."""
         cancel = getattr(self.broker, "cancel", None)
-        if cancel is None:
-            return
-        try:
-            res = cancel(key[0], key[1], po.result.broker_order_id)
-        except Exception as e:
-            res = {"error": str(e)}
-        self.audit.record("cancel", {"order_no": po.result.broker_order_id, "result": res},
-                          market=key[0].value, symbol=key[1], ts=now)
+        ok, res = False, None
+        if cancel is not None:
+            try:
+                res = cancel(key[0], key[1], po.result.broker_order_id)
+                ok = _cancel_confirmed(res)
+            except Exception as e:  # 실패 사유를 기록하고 재시도
+                res = {"error": str(e)}
+        po.cancel_attempts += 1
+        self.audit.record("cancel", {"order_no": po.result.broker_order_id, "ok": ok, "attempt": po.cancel_attempts,
+                                     "result": res}, market=key[0].value, symbol=key[1], ts=now)
+        if ok:
+            po.cancel_sent_at = now
+        elif po.cancel_attempts >= 3 and not self.gate.ledger.halted:
+            self.gate.ledger.halt(f"{key[1]} 미체결 주문 취소 3회 실패(주문번호 {po.result.broker_order_id})")
+            self._halted_now(now)
 
     # ------------------------------------------------------------------ 공통
     def _halted_now(self, now: datetime) -> None:
@@ -399,7 +432,7 @@ def restore_ledger(audit: AuditLog, gate: RiskGate) -> None:
         if e["kind"] == "exit":
             led.record_exit(day, market, Decimal(p["pnl_krw"]))
         elif (e["kind"] == "order" and p["request"]["side"] == Side.BUY.value
-              and p["result"]["status"] != OrderStatus.REJECTED.value):
+              and p["result"]["status"] not in (OrderStatus.REJECTED.value, OrderStatus.DRY_RUN.value)):
             led.record_entry(day, market)
     if halt_reason:
         led.halt(halt_reason)

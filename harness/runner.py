@@ -12,7 +12,7 @@ import queue
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -80,6 +80,9 @@ def summary(lanes: list[Lane], now: datetime, title: str) -> str:
     return "\n".join(lines)
 
 
+STUCK_AFTER_CLOSE = timedelta(minutes=30)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -103,6 +106,7 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
     recorder = TickRecorder(cfg.tick_dir) if cfg.tick_dir else None
     last_slow = last_reconcile = datetime.fromtimestamp(0, timezone.utc)
     last_beat = clock()
+    stuck_since: datetime | None = None   # 장 종료 후에도 청산되지 않은 보유가 남은 시각
 
     while True:
         now = clock()
@@ -152,6 +156,16 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
                 ln.engine.flatten_if_due(now)
             all_done = all(SESSIONS[s.market].done_for_day(now) for s in cfg.specs)
             busy = any(ln.engine.positions or ln.engine.pending for ln in lanes)
+            if all_done and busy:
+                stuck_since = stuck_since or now
+                if now - stuck_since >= STUCK_AFTER_CLOSE:
+                    # 밤새 장외 매도만 재시도하며 웹소켓 세션을 잡고 있지 않는다 → 알리고 종료(재시작은 미해소 검사로 막힘)
+                    for ln in lanes:
+                        if ln.engine.positions or ln.engine.pending:
+                            left = ", ".join(k[1] for k in {**ln.engine.positions, **ln.engine.pending})
+                            ln.engine.notify(f"🛑 장 종료 후 {STUCK_AFTER_CLOSE.seconds // 60}분간 청산되지 않음: {left} — "
+                                             "HTS 에서 직접 정리 후 scripts/resolve_pending.py 로 기록하세요")
+                    all_done, busy = True, False
             if all_done and not busy:
                 lanes[0].engine.notify(summary(lanes, now, "📊 장 마감 요약 — 종료"))
                 if recorder:

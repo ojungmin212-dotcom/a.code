@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from harness.audit import AuditLog
 from harness.engine import unreconciled_symbols
 from harness.evaluation import jev_calibration, slippage_bps, trade_stats
+from harness.risk.limits import RiskLimits
 
 
 class P4Criteria(BaseModel):
@@ -61,7 +62,10 @@ class PromotionResult:
 
 
 def evaluate(jev: AuditLog, baseline: AuditLog, c: PromotionCriteria, now: datetime,
-             fields_ready: bool) -> PromotionResult:
+             fields_ready: bool, capital_krw: Decimal | None = None) -> PromotionResult:
+    """capital_krw: 모의 운영 자본. 생략하면 config/risk.yaml 의 initial_capital_krw."""
+    if capital_krw is None:
+        capital_krw = RiskLimits.from_yaml(Path(__file__).resolve().parent.parent / "config" / "risk.yaml").initial_capital_krw
     r = PromotionResult()
     r.add("브로커·시세 필드 확정", fields_ready, "config/broker_fields.yaml · feed.yaml")
 
@@ -82,7 +86,7 @@ def evaluate(jev: AuditLog, baseline: AuditLog, c: PromotionCriteria, now: datet
 
     if c.require_beats_index:
         from harness.benchmark import compare
-        b = compare(jev, Decimal(500000))  # 모의 운영 자본(risk.yaml)
+        b = compare(jev, capital_krw)
         ok = bool(b and b.excess_pct is not None and b.excess_pct > 0)
         r.add("KOSPI 대비 초과수익", ok,
               f"{b.excess_pct:+.2f}%p" if b and b.excess_pct is not None else "지수 미확인")

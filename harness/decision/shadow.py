@@ -27,6 +27,7 @@ class ShadowObserver:
         self._month: str | None = None
         self._spent_month = 0.0
         self.stopped_reason: str | None = None
+        self.paused_until: datetime | None = None   # Jev 오류 후 일시 중단(운영 루프 지연 방지)
 
     def _roll(self, now: datetime) -> None:
         local = now.astimezone(KST)
@@ -41,7 +42,13 @@ class ShadowObserver:
                                     if datetime.fromisoformat(e["ts"]).astimezone(KST).strftime("%Y-%m-%d") == day)
             self.stopped_reason = None
 
+    PAUSE_AFTER_ERROR = timedelta(minutes=5)
+
     def observe(self, ctx: DecisionContext, has_thesis: bool, now: datetime) -> None:
+        """Jev 는 동기 호출이라 장애 시 매 호출이 타임아웃까지 루프를 막는다 → 오류 후 5분간 섀도만 쉰다
+        (실제 판단 호출은 그대로 한다)."""
+        if self.paused_until and now < self.paused_until:
+            return
         self._roll(now)
         if self._calls_today >= self.s.max_calls_per_day:
             self._stop(f"일 호출 상한 {self.s.max_calls_per_day}회", now)
@@ -53,7 +60,8 @@ class ShadowObserver:
         try:
             data = self.policy.client.ask(state, QUESTIONS)
         except JevError as e:
-            self.audit.record("shadow_error", {"error": str(e)[:300]},
+            self.paused_until = now + self.PAUSE_AFTER_ERROR
+            self.audit.record("shadow_error", {"error": str(e)[:300], "paused_until": self.paused_until},
                               market=ctx.market.value, symbol=ctx.symbol, ts=now)
             return
         self._calls_today += 1

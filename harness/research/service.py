@@ -1,6 +1,8 @@
 """리서치 1회 실행: 후보 종목마다 봇 3개 → 결합 → 논지 저장. 예산 초과·오류는 '논지 없음'으로 끝난다."""
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -65,13 +67,15 @@ class ResearchService:
             self.budget.reserve(self.cfg.per_symbol_usd(), now)
             opinions = {}
             for name, fn in (("sentiment", ask_sentiment), ("fundamental", ask_fundamental)):
-                op, res = fn(self.client, m, sym, item.name, now)
+                with self._billing(name, now, sym):
+                    op, res = fn(self.client, m, sym, item.name, now)
                 self._charge(name, res.usage, now, sym)
                 opinions[name] = op
                 self.audit.record("research_opinion", {"bot": name, "opinion": op,
                                                        "citations": res.citations},
                                   market=None, symbol=sym, ts=now)
-            bear, res = ask_bear(self.client, m, sym, item.name, now, opinions)
+            with self._billing("bear", now, sym):
+                bear, res = ask_bear(self.client, m, sym, item.name, now, opinions)
             self._charge("bear", res.usage, now, sym)
         except (GrokError, BudgetExceeded, ValueError) as e:
             self.repo.expire(m, sym, now)
@@ -86,6 +90,19 @@ class ResearchService:
         self.audit.record("research_result", {"reason": reason, "score": score, "bear": bear,
                                               "thesis": thesis}, symbol=sym, ts=now)
         return reason
+
+    @contextmanager
+    def _billing(self, bot: str, now: datetime, symbol: str) -> Iterator[None]:
+        """호출이 실패해도 서버가 처리했으면(응답 형식 오류·시간 초과·스키마 불일치) 추정 비용을 기록한다."""
+        try:
+            yield
+        except GrokError as e:
+            if e.billed:
+                self._charge(bot, {}, now, symbol)
+            raise
+        except ValueError:  # 응답은 받았으나 BotOpinion 스키마 검증 실패
+            self._charge(bot, {}, now, symbol)
+            raise
 
     def _charge(self, bot: str, usage: dict, now: datetime, symbol: str) -> None:
         self.budget.charge(bot, self.cfg.est_cost_usd[bot], usage, self.cfg.token_price_usd_per_m,

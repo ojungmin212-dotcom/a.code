@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT))
 from harness.bootstrap import broker_fields, feed_fields, load_yaml  # noqa: E402
 from harness.broker.nhplug_broker import NHPlugBroker, server_message  # noqa: E402
 from harness.models import Market, OrderRequest, OrderStatus, OrderType, Side  # noqa: E402
+from harness.risk import SESSIONS  # noqa: E402
 
 RAW = ROOT / "data" / "check-raw"
 results: list[dict] = []
@@ -40,18 +41,22 @@ def step(name: str, ok: bool, detail: str, raw: object = None) -> bool:
     return ok
 
 
-def check_balance_fields(broker: NHPlugBroker, symbol: str) -> tuple[bool, int]:
+def check_balance_fields(broker: NHPlugBroker, symbol: str, quiet: bool = False) -> tuple[bool, int]:
     data = broker.raw_kr_balance()
     f = broker.balance_fields
     rows = data.get(f.holdings_list) if isinstance(data, dict) else None
     rows = rows if isinstance(rows, list) else ([rows] if rows else [])
     hit = [r for r in rows if str(r.get(f.symbol_field, "")).strip() == symbol]
     if not hit:
+        if quiet:
+            return False, 0
         step("잔고 조회", isinstance(data, dict) and f.holdings_list in data,
              f"{symbol} 보유 없음 · {server_message(data)}", data)
         return False, 0
     missing = [k for k in (f.quantity_field, f.avg_price_field) if k not in hit[0]]
     qty = int(float(str(hit[0].get(f.quantity_field, 0)).replace(",", "") or 0))
+    if quiet:
+        return not missing, qty
     ok = step("잔고 필드", not missing, f"누락 {missing}" if missing else f"{symbol} {qty}주 · 필드 일치", data)
     return ok, qty
 
@@ -84,22 +89,35 @@ def main() -> None:
 
     # 2. 주문 → 잔고 → 원상복구
     order_ok = bal_ok = False
+    kr = SESSIONS[Market.KR]
+    now = datetime.now(timezone.utc)
+    if a.send and not (kr.is_open(now) and kr.minutes_since_open(now) >= 5 and kr.minutes_to_close(now) > 15):
+        step("장중 확인", False, "주문 점검은 국내 장중(09:05~15:15)에만 — 장외 시장가 주문은 다음 개장에 체결돼 계좌에 남는다")
+        a.send = False
     if a.send:
         cid = f"check-{uuid.uuid4().hex[:8]}"
         r = broker.place_order(OrderRequest(client_order_id=cid, market=Market.KR, symbol=a.symbol,
                                             side=Side.BUY, quantity=1, order_type=OrderType.MARKET))
         order_ok = step("주문번호 필드", r.status is OrderStatus.ACCEPTED,
                         f"{r.status} 주문번호={r.broker_order_id} · {r.message}", r.raw)
-        time.sleep(5)
+        qty = 0
         try:
+            for _ in range(6):  # 체결이 늦을 수 있어 최대 30초 기다린다
+                time.sleep(5)
+                bal_ok, qty = check_balance_fields(broker, a.symbol, quiet=True)
+                if qty >= 1:
+                    break
             bal_ok, qty = check_balance_fields(broker, a.symbol)
-            if qty >= 1:
-                s = broker.place_order(OrderRequest(client_order_id=cid + "-s", market=Market.KR,
-                                                    symbol=a.symbol, side=Side.SELL, quantity=1,
-                                                    order_type=OrderType.MARKET))
-                step("원상복구 매도", s.status is OrderStatus.ACCEPTED, f"{s.status} · {s.message}", s.raw)
         except Exception as e:
             step("잔고 조회", False, str(e))
+        if r.status in (OrderStatus.ACCEPTED, OrderStatus.UNKNOWN):
+            # 잔고 필드가 틀려 수량을 못 읽어도 1주 매도는 시도한다(현금 계좌는 초과 매도 불가 → 보유 없으면 거부될 뿐)
+            s = broker.place_order(OrderRequest(client_order_id=cid + "-s", market=Market.KR,
+                                                symbol=a.symbol, side=Side.SELL, quantity=1,
+                                                order_type=OrderType.MARKET))
+            step("원상복구 매도", s.status is OrderStatus.ACCEPTED, f"{s.status} · {s.message}", s.raw)
+            if s.status is not OrderStatus.ACCEPTED or qty < 1:
+                print("⚠️  모의계좌에 1주가 남았는지 HTS·MTS 로 확인하세요 — 남아 있으면 운영 시작 시 장부 불일치로 정지합니다.")
     else:
         print("ℹ️  --send 없이 실행: 주문번호·잔고 필드 확인은 건너뜀")
 

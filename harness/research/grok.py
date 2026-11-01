@@ -21,7 +21,11 @@ DEFAULT_BASE_URL = "https://api.x.ai"
 
 
 class GrokError(RuntimeError):
-    pass
+    """billed=True: 서버가 요청을 처리했을 수 있어 비용이 청구됐다고 봐야 하는 실패(예산에 반영)."""
+
+    def __init__(self, message: str, *, billed: bool = False):
+        super().__init__(message)
+        self.billed = billed
 
 
 @dataclass
@@ -86,20 +90,21 @@ class GrokClient:
                            headers={"Authorization": f"Bearer {self.api_key}"},
                            json=body, timeout=self.timeout_sec)
         except requests.RequestException as e:
-            raise GrokError(f"네트워크 오류: {e}") from e
+            # 응답 대기 중 시간 초과는 서버가 이미 처리(과금)했을 수 있다 — 보수적으로 청구된 것으로 본다
+            raise GrokError(f"네트워크 오류: {e}", billed=isinstance(e, requests.Timeout)) from e
         if not r.ok:
             raise GrokError(f"HTTP {r.status_code}: {r.text[:300]}")
         try:
             data = r.json()
         except ValueError as e:
-            raise GrokError("JSON 아님") from e
+            raise GrokError("JSON 아님", billed=True) from e
         text = _extract_text(data)
         if text is None:
-            raise GrokError("응답에서 출력 텍스트를 찾지 못함")
+            raise GrokError("응답에서 출력 텍스트를 찾지 못함", billed=True)
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as e:
-            raise GrokError(f"구조화 출력 파싱 실패: {text[:200]}") from e
+            raise GrokError(f"구조화 출력 파싱 실패: {text[:200]}", billed=True) from e
         if not isinstance(parsed, dict):
-            raise GrokError("구조화 출력이 객체가 아님")
+            raise GrokError("구조화 출력이 객체가 아님", billed=True)
         return GrokResult(parsed, data.get("usage") or {}, _extract_citations(data), data)
