@@ -147,7 +147,7 @@ def test_kospi_return_and_compare():
 def test_promotion_index_row(monkeypatch):
     from harness import benchmark
     from harness.promotion import PromotionCriteria, evaluate
-    monkeypatch.setattr(benchmark, "kospi_return_pct", lambda s, e, l=None: (50.0, "fake"))
+    monkeypatch.setattr(benchmark, "kospi_return_pct", lambda s, e, loaders=None: (50.0, "fake"))
     c = PromotionCriteria.from_yaml(ROOT / "config" / "promotion.yaml")
     a = AuditLog()
     a.record("exit", {"pnl_krw": Decimal(1000), "qty": 1}, market="KR", symbol="X")

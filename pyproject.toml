@@ -12,11 +12,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-cov>=5", "hypothesis>=6.100", "ruff>=0.6", "pyright>=1.1.380"]
 
 [tool.setuptools.packages.find]
 include = ["harness*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore::DeprecationWarning:exchange_calendars.*"]
+filterwarnings = [
+    "ignore::DeprecationWarning:exchange_calendars.*",
+    "ignore::ResourceWarning",   # 테스트용 메모리 SQLite 연결
+]
+
+[tool.ruff]
+line-length = 150   # 한글 주석·메시지가 많아 넉넉하게
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E731"]   # 테스트의 짧은 lambda 허용
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E402"]   # sys.path 설정 후 import
+
+[tool.pyright]
+include = ["harness"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"

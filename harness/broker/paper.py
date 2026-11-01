@@ -4,7 +4,14 @@ from __future__ import annotations
 from decimal import Decimal
 
 from harness.models import (
-    AccountState, Market, OrderRequest, OrderResult, OrderStatus, OrderType, Position, Side,
+    AccountState,
+    Market,
+    OrderRequest,
+    OrderResult,
+    OrderStatus,
+    OrderType,
+    Position,
+    Side,
 )
 
 from .base import Guard, IdempotencyGuard
@@ -35,6 +42,7 @@ class PaperBroker:
             return self._reject(req, "시세 없음")
 
         if req.order_type is OrderType.LIMIT:
+            assert req.limit_price is not None
             crosses = last <= req.limit_price if req.side is Side.BUY else last >= req.limit_price
             if not crosses:
                 return self._reject(req, "지정가 미도달(모의 브로커는 미체결 주문을 보관하지 않음)")

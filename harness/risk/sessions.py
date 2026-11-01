@@ -58,11 +58,12 @@ class MarketSession:
         cal = _calendar(self.calendar) if self.calendar else None
         if cal is not None:
             import pandas as pd
-            ts = pd.Timestamp(d)
+            ts = pd.Timestamp(d)  # 날짜 입력이라 NaT 가 될 수 없음(pandas 타입 표기 한계로 아래 3줄 무시)
             if cal.first_session <= ts <= cal.last_session:
-                if cal.is_session(ts):
-                    result = (True, cal.session_open(ts).to_pydatetime().astimezone(self.tz),
-                              cal.session_close(ts).to_pydatetime().astimezone(self.tz))
+                if cal.is_session(ts):  # pyright: ignore[reportArgumentType]
+                    o = cal.session_open(ts)  # pyright: ignore[reportArgumentType]
+                    c = cal.session_close(ts)  # pyright: ignore[reportArgumentType]
+                    result = (True, o.to_pydatetime().astimezone(self.tz), c.to_pydatetime().astimezone(self.tz))
                 else:
                     result = (False, default[1], default[2])
             else:

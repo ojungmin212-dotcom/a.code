@@ -129,9 +129,11 @@ class NHPlugBroker:
             "sor_mkt_sli_yn": "N",
         }
         if not is_market:
-            if req.limit_price != req.limit_price.to_integral_value():
+            price = req.limit_price
+            assert price is not None  # OrderRequest 검증이 보장
+            if price != price.to_integral_value():
                 raise ValueError("국내주식 지정가는 원 단위 정수여야 합니다")
-            input_0["orr_pr"] = int(req.limit_price)
+            input_0["orr_pr"] = int(price)
         return _KR_PATHS[req.side], input_0
 
     def _build_us(self, req: OrderRequest) -> tuple[str, dict]:
@@ -147,6 +149,7 @@ class NHPlugBroker:
             "wtm_cur_knd_cd": "2",                             # 2 = 원화(통합증거금)
         }
         if not is_market:
+            assert req.limit_price is not None
             input_0["fc_orr_uit_pr"] = float(req.limit_price.quantize(Decimal("0.01")))
         path = "/gbstock/order/v1/buy" if req.side is Side.BUY else self.us.sell_path
         return path, input_0

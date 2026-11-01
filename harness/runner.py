@@ -80,7 +80,19 @@ def summary(lanes: list[Lane], now: datetime, title: str) -> str:
     return "\n".join(lines)
 
 
-def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
+             clock: Callable[[], datetime] = _utcnow,
+             sleep: Callable[[float], None] = time.sleep,
+             feed_factory: Callable[[MarketSpec], NHTickFeed] | None = None,
+             notice_factory: Callable[[], NHNoticeFeed] | None = None) -> None:
+    """clock·sleep·feed_factory·notice_factory 는 시뮬레이션 테스트(G4)용 주입점이다."""
+    feed_factory = feed_factory or (lambda spec: NHTickFeed(spec.symbols, spec.fields, market=spec.market,
+                                                            tr_cd=spec.tr_cd, keys=spec.keys or None))
+    notice_factory = notice_factory or NHNoticeFeed
     if sum(not ln.is_paper for ln in lanes) > 1:
         raise ValueError("브로커로 주문하는 레인은 하나만 둘 수 있습니다(같은 계좌 잔고 혼선)")
     scope = {(s.market, x) for s in cfg.specs for x in (s.tradable or s.symbols)}
@@ -90,16 +102,17 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
     notices: NHNoticeFeed | None = None
     recorder = TickRecorder(cfg.tick_dir) if cfg.tick_dir else None
     last_slow = last_reconcile = datetime.fromtimestamp(0, timezone.utc)
-    last_beat = datetime.now(timezone.utc)
+    last_beat = clock()
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = clock()
         if cfg.heartbeat_min and (now - last_beat).total_seconds() >= cfg.heartbeat_min * 60:
             lanes[0].engine.notify(summary(lanes, now, "💓 생존 신호"))
             last_beat = now
-        if broker_lane and cfg.fill_notices and not broker_lane.broker.dry_run:
+        if (broker_lane is not None and isinstance(broker_lane.broker, NHPlugBroker)
+                and cfg.fill_notices and not broker_lane.broker.dry_run):
             if notices is None or not notices.alive():
-                notices = NHNoticeFeed()
+                notices = notice_factory()
                 notices.start()
             while not notices.notices.empty():
                 n = notices.notices.get_nowait()
@@ -120,13 +133,13 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
                     ln.engine.theses = store
                 if rates is not None:
                     ln.engine.set_fx(rates, now)
-                    if ln.is_paper:
+                    if isinstance(ln.broker, PaperBroker):
                         for m, r in rates.items():
                             ln.broker.set_fx(m, r)
             last_slow = now
         if (now - last_reconcile).total_seconds() >= cfg.reconcile_every_sec:
             for ln in lanes:
-                if not ln.is_paper and ln.broker.balance_fields:
+                if isinstance(ln.broker, NHPlugBroker) and ln.broker.balance_fields:
                     try:
                         ln.engine.reconcile(ln.broker.holdings(), now, scope, cfg.pending_timeout_sec)
                     except Exception as e:  # 잔고 조회 실패는 기록만 하고 다음 주기에 재시도
@@ -144,14 +157,13 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
                 if recorder:
                     recorder.close()
                 return
-            time.sleep(5)
+            sleep(5)
             continue
 
         spec = open_specs[0]
         feed = feeds.get(spec.market)
         if feed is None or not feed.alive():
-            feed = NHTickFeed(spec.symbols, spec.fields, market=spec.market, tr_cd=spec.tr_cd,
-                              keys=spec.keys or None)
+            feed = feed_factory(spec)
             feed.start()
             feeds[spec.market] = feed
         try:
@@ -164,7 +176,7 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig) -> None:
             recorder.write(tick)
         bar = agg.add(tick)
         for ln in lanes:
-            if ln.is_paper:
+            if isinstance(ln.broker, PaperBroker):
                 ln.broker.set_price(tick.market, tick.symbol, tick.price)
             if bar is not None:
                 ln.engine.on_bar(bar, tick.ts)

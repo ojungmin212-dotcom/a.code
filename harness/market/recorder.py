@@ -24,6 +24,7 @@ class TickRecorder:
             if new:
                 self._f.write("ts,market,symbol,price,volume\n")
             self._key = key
+        assert self._f is not None
         self._f.write(f"{t.ts.isoformat()},{t.market.value},{t.symbol},{t.price},{t.volume}\n")
 
     def close(self) -> None:

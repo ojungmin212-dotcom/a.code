@@ -1,0 +1,31 @@
+# G5: push·PR 마다 린트·타입 검사·테스트(성질 기반·운영 루프 시뮬레이션 포함)
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 설치
+        run: pip install -e ".[dev]"
+      - name: 린트 (ruff)
+        run: ruff check harness scripts tests
+      - name: 타입 검사 (pyright)
+        run: pyright
+      - name: 테스트 + 커버리지 (85% 미만이면 실패)
+        env:
+          TZ: Asia/Seoul
+        run: pytest -q --cov=harness --cov-report=term-missing --cov-fail-under=85

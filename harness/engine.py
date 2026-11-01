@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import TypeVar
 
 from harness.audit import AuditLog
 from harness.broker.base import Broker, DuplicateOrderError
@@ -19,12 +20,21 @@ from harness.decision.shadow import ShadowObserver
 from harness.market.bars import Bar
 from harness.market.indicators import compute_indicators
 from harness.models import (
-    AccountState, EntrySignal, Market, OrderRequest, OrderResult, OrderStatus, OrderType, Position, Side,
+    AccountState,
+    EntrySignal,
+    Market,
+    OrderRequest,
+    OrderResult,
+    OrderStatus,
+    OrderType,
+    Position,
+    Side,
 )
 from harness.research.thesis import ThesisStore
 from harness.risk.gate import RiskGate
 
 Key = tuple[Market, str]
+T = TypeVar("T")
 
 
 @dataclass
@@ -53,6 +63,13 @@ class PendingOrder:
 
     def vwap(self) -> Decimal | None:
         return self.filled_value / self.filled_qty if self.filled_qty else None
+
+
+def _need(v: T | None) -> T:
+    """체결된 주문에는 반드시 있어야 하는 값(체결가·신호). 없으면 장부를 망치기 전에 멈춘다."""
+    if v is None:
+        raise RuntimeError("체결 기록에 필요한 값이 없습니다(브로커 응답 이상)")
+    return v
 
 
 def _norm_order_no(v: object) -> str:
@@ -119,6 +136,7 @@ class TradingEngine:
                               thesis=thesis or ShadowObserver.placeholder_thesis(market, symbol, now),
                               bars=bars, indicators=compute_indicators(bars),
                               fx_rate_krw=self.fx.get(market, Decimal(1)))
+        assert self.shadow is not None
         self.shadow.observe(ctx, thesis is not None, now)
 
     def _step(self, bar: Bar, now: datetime) -> None:
@@ -175,7 +193,7 @@ class TradingEngine:
                            side=Side.SELL, quantity=p.quantity, order_type=OrderType.MARKET)
         res = self._send(req, {"reason": reason}, now)
         if res.status is OrderStatus.FILLED:
-            self._book_exit(key, res.filled_quantity, res.fill_price, reason, now)
+            self._book_exit(key, res.filled_quantity, _need(res.fill_price), reason, now)
         elif res.status in (OrderStatus.ACCEPTED, OrderStatus.UNKNOWN):
             self.pending[key] = PendingOrder(res, Side.SELL, p.quantity, p.quantity, now, reason)
 
@@ -232,7 +250,7 @@ class TradingEngine:
         if res.status is not OrderStatus.REJECTED:
             self.gate.ledger.record_entry(self.gate.sessions[market].trading_date(now), market)
         if res.status is OrderStatus.FILLED:
-            self._book_entry(key, sig, res.filled_quantity, res.fill_price, now)
+            self._book_entry(key, sig, res.filled_quantity, _need(res.fill_price), now)
         elif res.status in (OrderStatus.ACCEPTED, OrderStatus.UNKNOWN):
             self.pending[key] = PendingOrder(res, Side.BUY, 0, risk.quantity, now, "entry", sig,
                                              order_type=req.order_type)
@@ -262,7 +280,7 @@ class TradingEngine:
                 filled = held - po.qty_before
                 if filled >= po.qty_ordered:
                     self.pending.pop(key)
-                    self._book_entry(key, po.signal, filled, po.vwap() or avg, now)
+                    self._book_entry(key, _need(po.signal), filled, po.vwap() or avg, now)
                 elif timed_out:
                     if (po.order_type is OrderType.LIMIT and po.result.broker_order_id
                             and po.cancel_sent_at is None):
@@ -272,7 +290,7 @@ class TradingEngine:
                         continue
                     self.pending.pop(key)
                     if filled > 0:
-                        self._book_entry(key, po.signal, filled, po.vwap() or avg, now)
+                        self._book_entry(key, _need(po.signal), filled, po.vwap() or avg, now)
                     else:
                         self.audit.record("pending_resolved", {"note": "시간 초과 · 잔고 변화 없음 → 미체결"},
                                           market=key[0].value, symbol=key[1], ts=now)
@@ -327,9 +345,9 @@ class TradingEngine:
             return  # 부분 체결 — 나머지 통보 또는 잔고 대조를 기다린다
         self.pending.pop(key)
         if po.side is Side.BUY:
-            self._book_entry(key, po.signal, po.filled_qty, po.vwap(), now)
+            self._book_entry(key, _need(po.signal), po.filled_qty, _need(po.vwap()), now)
         else:
-            self._book_exit(key, po.filled_qty, po.vwap(), po.reason, now)
+            self._book_exit(key, po.filled_qty, _need(po.vwap()), po.reason, now)
 
     def _cancel(self, key: Key, po: PendingOrder, now: datetime) -> None:
         po.cancel_sent_at = now

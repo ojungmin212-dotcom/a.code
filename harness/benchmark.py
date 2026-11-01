@@ -11,8 +11,8 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from harness.audit import AuditLog
-from harness.risk.sessions import SESSIONS
 from harness.models import Market
+from harness.risk.sessions import SESSIONS
 
 
 @dataclass

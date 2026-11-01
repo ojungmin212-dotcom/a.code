@@ -14,9 +14,10 @@ def atr(bars: Sequence[Bar], n: int = 14) -> float:
     if len(bars) < 2:
         return 0.0
     trs = []
-    for prev, cur in zip(bars[-n - 1:-1], bars[-n:]):
-        h, l, pc = float(cur.high), float(cur.low), float(prev.close)
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    window = bars[-n - 1:]
+    for prev, cur in zip(window[:-1], window[1:], strict=True):
+        hi, lo, pc = float(cur.high), float(cur.low), float(prev.close)
+        trs.append(max(hi - lo, abs(hi - pc), abs(lo - pc)))
     return sum(trs) / len(trs)
 
 

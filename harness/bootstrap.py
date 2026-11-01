@@ -151,10 +151,14 @@ def assemble(*, mode: str, theses_path: str, policies: list[str], broker_policy:
         else:
             broker = PaperBroker(limits.initial_capital_krw, guard=audit.guard(),
                                  slippage_bps=Decimal(str(cfg.paper_slippage_bps)))
-        policy = (JevPolicy(cfg, JevClient(cfg.jev.model, timeout_sec=cfg.jev.timeout_sec))
-                  if name == "jev" else BaselinePolicy(cfg))
-        shadow = (ShadowObserver(policy, audit, cfg.shadow)
-                  if name == "jev" and cfg.shadow and cfg.shadow.enabled else None)
+        policy: JevPolicy | BaselinePolicy
+        shadow = None
+        if name == "jev":
+            policy = JevPolicy(cfg, JevClient(cfg.jev.model, timeout_sec=cfg.jev.timeout_sec))
+            if cfg.shadow and cfg.shadow.enabled:
+                shadow = ShadowObserver(policy, audit, cfg.shadow)
+        else:
+            policy = BaselinePolicy(cfg)
         gate = RiskGate(limits, Ledger())
         restore_ledger(audit, gate)
         tag = f"{mode}/{name}" + ("(paper)" if isinstance(broker, PaperBroker) else "")

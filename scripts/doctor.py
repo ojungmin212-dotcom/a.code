@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 import harness  # noqa: E402,F401  (.env 로드)
 from harness.audit import AuditLog  # noqa: E402
-from harness.bootstrap import fields_ready, load_yaml, p4_enabled  # noqa: E402
+from harness.bootstrap import fields_ready, p4_enabled  # noqa: E402
 from harness.decision import StrategyConfig  # noqa: E402
 from harness.engine import unreconciled_symbols  # noqa: E402
 from harness.models import Market  # noqa: E402
