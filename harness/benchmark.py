@@ -35,7 +35,7 @@ def _fdr(start: date, end: date) -> list[float]:
 
 
 def _pykrx(start: date, end: date) -> list[float]:
-    from pykrx import stock
+    from pykrx import stock  # pyright: ignore[reportMissingImports]  # 선택 의존성(대체 경로)
     df = stock.get_index_ohlcv(start.strftime("%Y%m%d"), end.strftime("%Y%m%d"), "1001")
     return [float(x) for x in df["종가"].tolist()]
 
