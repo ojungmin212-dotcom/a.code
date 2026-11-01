@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import queue
 import time
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,7 @@ class MarketSpec:
 class Lane:
     engine: TradingEngine
     broker: NHPlugBroker | PaperBroker
+    last_error_min: datetime | None = None   # 레인 오류 기록 분당 1회 제한
 
     @property
     def is_paper(self) -> bool:
@@ -83,6 +85,23 @@ def summary(lanes: list[Lane], now: datetime, title: str) -> str:
 STUCK_AFTER_CLOSE = timedelta(minutes=30)
 
 
+def _guarded(ln: Lane, now: datetime, what: str, fn: Callable[..., object], *args: object) -> None:
+    """H4 레인 격리: 한 레인의 예외가 다른 레인·프로세스를 멈추지 않게 한다.
+    예외 시 그 레인만 정지(신규 진입 중단, 다음 주기부터 보유 청산 시도)하고 알린다. 같은 오류 기록은 분당 1회."""
+    try:
+        fn(*args)
+    except Exception as exc:  # 의도적으로 모든 예외: 버그 하나가 다른 정책·보유 청산을 막지 않게
+        e = ln.engine
+        minute = now.replace(second=0, microsecond=0)
+        if ln.last_error_min != minute:
+            ln.last_error_min = minute
+            e.audit.record("lane_error", {"where": what, "error": f"{type(exc).__name__}: {exc}",
+                                          "trace": traceback.format_exc()[-2000:]}, ts=now)
+        if not e.gate.ledger.halted:
+            e.gate.ledger.halt(f"레인 오류({what}): {type(exc).__name__}: {str(exc)[:120]}")
+            e._halted_now(now)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -120,14 +139,15 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
                 notices.start()
             while not notices.notices.empty():
                 n = notices.notices.get_nowait()
-                broker_lane.engine.on_fill_notice(n.order_no, n.qty, n.price, n.rejected, now)
+                _guarded(broker_lane, now, "체결통보", broker_lane.engine.on_fill_notice,
+                         n.order_no, n.qty, n.price, n.rejected, now)
         for ln in lanes:
             e = ln.engine
             if cfg.kill_file.exists() and not e.gate.ledger.halted:
                 e.gate.ledger.halt(f"수동 킬 스위치({cfg.kill_file.name})")
                 e._halted_now(now)
             if e.gate.ledger.halted:
-                e._exit_all("halt", now)
+                _guarded(ln, now, "정지 청산", e._exit_all, "halt", now)
 
         if (now - last_slow).total_seconds() >= 60:
             store = cfg.repo.store() if cfg.repo else None
@@ -153,7 +173,7 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
         open_specs = [s for s in cfg.specs if SESSIONS[s.market].is_open(now)]
         if not open_specs:
             for ln in lanes:
-                ln.engine.flatten_if_due(now)
+                _guarded(ln, now, "마감 청산", ln.engine.flatten_if_due, now)
             all_done = all(SESSIONS[s.market].done_for_day(now) for s in cfg.specs)
             busy = any(ln.engine.positions or ln.engine.pending for ln in lanes)
             if all_done and busy:
@@ -184,7 +204,7 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
             tick = feed.ticks.get(timeout=1.0)
         except queue.Empty:
             for ln in lanes:
-                ln.engine.flatten_if_due(now)
+                _guarded(ln, now, "마감 청산", ln.engine.flatten_if_due, now)
             continue
         if recorder:
             recorder.write(tick)
@@ -193,5 +213,5 @@ def run_loop(lanes: list[Lane], cfg: LoopConfig, *,
             if isinstance(ln.broker, PaperBroker):
                 ln.broker.set_price(tick.market, tick.symbol, tick.price)
             if bar is not None:
-                ln.engine.on_bar(bar, tick.ts)
-            ln.engine.flatten_if_due(now)
+                _guarded(ln, now, "1분봉 처리", ln.engine.on_bar, bar, tick.ts)
+            _guarded(ln, now, "마감 청산", ln.engine.flatten_if_due, now)

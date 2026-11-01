@@ -241,3 +241,33 @@ def test_weekend_exits_immediately(tmp_path, weekday_offset):
         assert not nh.orders and clock.t < datetime.combine(DAY, time(9, 5), KST)
     finally:
         DAY = saved
+
+
+def test_lane_isolation_one_policy_crash_does_not_stop_others(tmp_path):
+    """H4: 비교군 레인이 매 봉 예외를 던져도 Jev(브로커) 레인은 정상 운영·청산하고 루프는 끝까지 돈다."""
+    from .test_engine import AlwaysBuy
+
+    class Boom(AlwaysBuy):
+        name = "boom"
+
+        def decide(self, ctx):
+            raise KeyError("버그")
+
+    orig_engine = TradingEngine.__init__
+
+    def patched(self, *a, **kw):
+        orig_engine(self, *a, **kw)
+        if isinstance(kw.get("broker"), PaperBroker):
+            self.policy = Boom(self.policy.cfg)
+
+    TradingEngine.__init__ = patched
+    try:
+        lanes, nh, msgs, clock = world(tmp_path, calm_from=time(14, 40))
+    finally:
+        TradingEngine.__init__ = orig_engine
+    live, paper = lanes[0].engine, lanes[1].engine
+    assert paper.gate.ledger.halted and "레인 오류" in paper.gate.ledger.halt_reason
+    assert len(paper.audit.events("lane_error")) >= 1
+    assert "KeyError" in paper.audit.events("lane_error")[0]["payload"]["error"]
+    assert not live.gate.ledger.halted and live.audit.events("exit")          # 다른 레인은 정상
+    assert any("장 마감 요약" in m for m in msgs)                               # 프로세스는 끝까지

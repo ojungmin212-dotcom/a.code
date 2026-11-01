@@ -1,21 +1,19 @@
-"""연결·필드 일괄 점검(F5). 결과를 data/check-report.json 과 화면에 남긴다.
+"""연결·필드 일괄 점검(F5·H2). 결과를 data/check-report.json 과 화면에 남긴다. 로직은 harness/checks.py.
 
-    python scripts/check_all.py                 # 조회만: 계좌·잔고·실시간·Jev·Grok (주문 없음)
-    python scripts/check_all.py --send          # + 모의계좌 1주 시장가 매수 → 잔고 확인 → 1주 매도(원상복구)
-    python scripts/check_all.py --send --apply  # 모든 필드 확인되면 verified_by_mock: true 로 설정 파일 갱신
+    python scripts/check_all.py                 # 조회만: 계좌·실시간·Jev·Grok (주문 없음)
+    python scripts/check_all.py --send          # + 모의계좌 1주 시장가 매수 → 잔고·체결통보 확인 → 1주 매도(원상복구)
+    python scripts/check_all.py --send --apply  # 주문번호·잔고·실시간 필드·체결수량 의미가 모두 확인되면 verified_by_mock: true
 
-국내 장중(09:10~15:20)에 실행해야 실시간·체결 확인이 된다. 모의투자 서버에서만 동작한다.
+국내 장중(09:05~15:15)에 실행해야 주문·실시간 확인이 된다. 모의투자 서버에서만 동작한다.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,42 +21,20 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from harness.bootstrap import broker_fields, feed_fields, load_yaml  # noqa: E402
-from harness.broker.nhplug_broker import NHPlugBroker, server_message  # noqa: E402
-from harness.models import Market, OrderRequest, OrderStatus, OrderType, Side  # noqa: E402
-from harness.risk import SESSIONS  # noqa: E402
+from harness.broker.nhplug_broker import NHPlugBroker  # noqa: E402
+from harness.checks import Checker, Deps, apply_verified  # noqa: E402
+from harness.models import Market  # noqa: E402
 
 RAW = ROOT / "data" / "check-raw"
-results: list[dict] = []
 
 
-def step(name: str, ok: bool, detail: str, raw: object = None) -> bool:
-    results.append({"name": name, "ok": ok, "detail": detail})
-    print(f"{'✅' if ok else '❌'} {name}: {detail}", flush=True)
-    if raw is not None:
-        RAW.mkdir(parents=True, exist_ok=True)
-        (RAW / f"{len(results):02d}-{re.sub(r'[^0-9A-Za-z가-힣]+', '_', name)}.json").write_text(
-            json.dumps(raw, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    return ok
-
-
-def check_balance_fields(broker: NHPlugBroker, symbol: str, quiet: bool = False) -> tuple[bool, int]:
-    data = broker.raw_kr_balance()
-    f = broker.balance_fields
-    rows = data.get(f.holdings_list) if isinstance(data, dict) else None
-    rows = rows if isinstance(rows, list) else ([rows] if rows else [])
-    hit = [r for r in rows if str(r.get(f.symbol_field, "")).strip() == symbol]
-    if not hit:
-        if quiet:
-            return False, 0
-        step("잔고 조회", isinstance(data, dict) and f.holdings_list in data,
-             f"{symbol} 보유 없음 · {server_message(data)}", data)
-        return False, 0
-    missing = [k for k in (f.quantity_field, f.avg_price_field) if k not in hit[0]]
-    qty = int(float(str(hit[0].get(f.quantity_field, 0)).replace(",", "") or 0))
-    if quiet:
-        return not missing, qty
-    ok = step("잔고 필드", not missing, f"누락 {missing}" if missing else f"{symbol} {qty}주 · 필드 일치", data)
-    return ok, qty
+def ping(name: str) -> tuple[bool, str]:
+    RAW.mkdir(parents=True, exist_ok=True)
+    cmd = {"Jev": "jev_ping.py", "Grok": "grok_ping.py"}[name]
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / cmd)], capture_output=True, text=True,
+                         timeout=120, check=False)
+    (RAW / f"{name}.txt").write_text(out.stdout + out.stderr, encoding="utf-8")
+    return out.returncode == 0, f"출력: data/check-raw/{name}.txt"
 
 
 def main() -> None:
@@ -68,95 +44,27 @@ def main() -> None:
     p.add_argument("--symbol", default="005930")
     a = p.parse_args()
     order_fields, bfields = broker_fields()
-
-    # 1. 브로커 환경
     try:
         broker = NHPlugBroker(os.environ.get("NHPLUG_DEFAULT_ACCOUNT", ""), dry_run=not a.send,
                               order_no_field=order_fields, balance_fields=bfields)
-        step("모의투자 서버", broker.is_mock(), "moapi 확인")
     except Exception as e:
-        step("브로커 설정", False, str(e))
-        return finish(a.apply)
+        sys.exit(f"❌ 브로커 설정: {e}")
+    from nhplug.realtime import subscribe
 
-    try:
-        acc = broker.raw_accounts()
-        rows = acc.get("Output_0") or []
-        mine = [r for r in rows if str(r.get("acct_no")) == broker.account_no]
-        step("계좌", bool(mine) and str(mine[0].get("acct_type")) == "03",
-             f"acct_type={mine[0].get('acct_type') if mine else '없음'} (모의=03)", acc)
-    except Exception as e:
-        step("계좌", False, str(e))
+    from harness.market.notices import NHNoticeFeed
+    deps = Deps(broker=broker, feed_fields=feed_fields(Market.KR), subscribe=subscribe,
+                clock=lambda: datetime.now(timezone.utc), sleep=time.sleep,
+                notice_feed=NHNoticeFeed if a.send else None, run_ping=ping, raw_dir=RAW)
+    rep = Checker(deps).run(a.send, a.symbol)
 
-    # 2. 주문 → 잔고 → 원상복구
-    order_ok = bal_ok = False
-    kr = SESSIONS[Market.KR]
-    now = datetime.now(timezone.utc)
-    if a.send and not (kr.is_open(now) and kr.minutes_since_open(now) >= 5 and kr.minutes_to_close(now) > 15):
-        step("장중 확인", False, "주문 점검은 국내 장중(09:05~15:15)에만 — 장외 시장가 주문은 다음 개장에 체결돼 계좌에 남는다")
-        a.send = False
-    if a.send:
-        cid = f"check-{uuid.uuid4().hex[:8]}"
-        r = broker.place_order(OrderRequest(client_order_id=cid, market=Market.KR, symbol=a.symbol,
-                                            side=Side.BUY, quantity=1, order_type=OrderType.MARKET))
-        order_ok = step("주문번호 필드", r.status is OrderStatus.ACCEPTED,
-                        f"{r.status} 주문번호={r.broker_order_id} · {r.message}", r.raw)
-        qty = 0
-        try:
-            for _ in range(6):  # 체결이 늦을 수 있어 최대 30초 기다린다
-                time.sleep(5)
-                bal_ok, qty = check_balance_fields(broker, a.symbol, quiet=True)
-                if qty >= 1:
-                    break
-            bal_ok, qty = check_balance_fields(broker, a.symbol)
-        except Exception as e:
-            step("잔고 조회", False, str(e))
-        if r.status in (OrderStatus.ACCEPTED, OrderStatus.UNKNOWN):
-            # 잔고 필드가 틀려 수량을 못 읽어도 1주 매도는 시도한다(현금 계좌는 초과 매도 불가 → 보유 없으면 거부될 뿐)
-            s = broker.place_order(OrderRequest(client_order_id=cid + "-s", market=Market.KR,
-                                                symbol=a.symbol, side=Side.SELL, quantity=1,
-                                                order_type=OrderType.MARKET))
-            step("원상복구 매도", s.status is OrderStatus.ACCEPTED, f"{s.status} · {s.message}", s.raw)
-            if s.status is not OrderStatus.ACCEPTED or qty < 1:
-                print("⚠️  모의계좌에 1주가 남았는지 HTS·MTS 로 확인하세요 — 남아 있으면 운영 시작 시 장부 불일치로 정지합니다.")
-    else:
-        print("ℹ️  --send 없이 실행: 주문번호·잔고 필드 확인은 건너뜀")
-
-    # 3. 실시간 체결가
-    feed_ok = False
-    ff = feed_fields(Market.KR)
-    try:
-        from nhplug.realtime import subscribe
-        msgs: list[dict] = []
-        subscribe([a.symbol], msgs.append, tr_cd="mc", max_messages=5, timeout=20)
-        bodies = [m.get("body") or {} for m in msgs]
-        good = [b for b in bodies if ff and ff.price in b and ff.volume in b]
-        feed_ok = step("실시간 필드", bool(good),
-                       f"{len(msgs)}건 수신 · 필드 일치 {len(good)}건" if msgs else "0건(장 마감이면 정상)", msgs)
-    except Exception as e:
-        step("실시간", False, str(e))
-
-    # 4. Jev / Grok
-    RAW.mkdir(parents=True, exist_ok=True)
-    for name, cmd in (("Jev", "jev_ping.py"), ("Grok", "grok_ping.py")):
-        out = subprocess.run([sys.executable, str(ROOT / "scripts" / cmd)], capture_output=True,
-                             text=True, timeout=120)
-        (RAW / f"{name}.txt").write_text(out.stdout + out.stderr, encoding="utf-8")
-        step(name, out.returncode == 0, f"출력: data/check-raw/{name}.txt")
-
-    finish(a.apply and order_ok and bal_ok and feed_ok)
-
-
-def finish(apply: bool) -> None:
-    report = {"at": datetime.now(timezone.utc).isoformat(), "results": results}
     (ROOT / "data").mkdir(exist_ok=True)
-    (ROOT / "data" / "check-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2),
-                                                     encoding="utf-8")
-    print(f"\n보고서: data/check-report.json · 원문: data/check-raw/ · 통과 {sum(r['ok'] for r in results)}/{len(results)}")
-    if apply:
-        for name in ("broker_fields.yaml", "feed.yaml"):
-            path = ROOT / "config" / name
-            path.write_text(re.sub(r"(?m)^verified_by_mock: .*$", "verified_by_mock: true",
-                                   path.read_text(encoding="utf-8")), encoding="utf-8")
+    (ROOT / "data" / "check-report.json").write_text(json.dumps(
+        {"at": datetime.now(timezone.utc).isoformat(), "results": rep.results, "facts": rep.facts},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n보고서: data/check-report.json · 원문: data/check-raw/ · 통과 "
+          f"{sum(r['ok'] for r in rep.results)}/{len(rep.results)} · 확정 사실 {rep.facts}")
+    if a.apply and rep.apply_ok:
+        apply_verified(ROOT / "config")
         print("✅ config/broker_fields.yaml · feed.yaml 의 verified_by_mock 을 true 로 설정했습니다.")
     elif load_yaml("broker_fields.yaml").get("verified_by_mock") is not True:
         print("ℹ️  verified_by_mock 은 false 유지(승격 심사·실거래 잠금). 모두 통과 시 --send --apply 로 갱신.")

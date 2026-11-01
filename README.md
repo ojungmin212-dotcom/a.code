@@ -1,6 +1,8 @@
 # a.code — Grok + Jev 장중 매매 하네스
 
 ## 빠른 시작 (v1.1)
+
+> **첫 실행은 [docs/first-run.md](docs/first-run.md) 런북을 따르세요.**
 ```bash
 pip install -e ".[dev]" && pytest
 cp .env.example .env && chmod 600 .env            # 키·모의계좌 입력
