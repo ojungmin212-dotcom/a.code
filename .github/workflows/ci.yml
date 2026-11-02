@@ -11,8 +11,16 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # I2: 오박사님 PC 가 Windows 일 수 있어 두 OS 모두에서 검사(경로·인코딩·시간대)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -28,4 +36,5 @@ jobs:
       - name: 테스트 + 커버리지 (85% 미만이면 실패)
         env:
           TZ: Asia/Seoul
+          PYTHONIOENCODING: ${{ matrix.os == 'windows-latest' && 'cp949' || 'utf-8' }}   # Windows 는 cp949 출력으로 검사
         run: pytest -q --cov=harness --cov-report=term-missing --cov-fail-under=85

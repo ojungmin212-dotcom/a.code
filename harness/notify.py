@@ -17,7 +17,10 @@ def make_notifier(prefix: str, post: Callable[..., Any] | None = None) -> Callab
 
     def notify(msg: str) -> None:
         line = f"[{datetime.now():%H:%M:%S}] [{prefix}] {msg}"
-        print(line, flush=True)
+        try:
+            print(line, flush=True)
+        except (UnicodeEncodeError, OSError):  # 콘솔 출력 실패가 매매를 멈추게 하지 않는다(I1)
+            pass
         if token and chat:
             try:
                 post(f"https://api.telegram.org/bot{token}/sendMessage",
