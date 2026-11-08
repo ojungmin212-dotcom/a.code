@@ -200,7 +200,9 @@ def calib_cases(draw):
     for d in DAYS:  # 09:00~15:30, 거래 없는 분은 봉 없음
         for m in draw(st.lists(st.integers(0, 390), unique=True, max_size=60)):
             bars.append((d + m * MIN, draw(st.integers(90, 110))))
-    decisions = [(DAYS[draw(st.integers(0, 1))] + draw(st.integers(1, 391)) * MIN,
+    # 판단 시각: 리플레이처럼 분 경계이거나, 운영 루프처럼 다음 분 첫 틱 시각(초·밀리초 붙음)
+    lag = st.one_of(st.just(0), st.integers(0, 59_999))
+    decisions = [(DAYS[draw(st.integers(0, 1))] + draw(st.integers(1, 391)) * MIN + timedelta(milliseconds=draw(lag)),
                   draw(st.floats(0, 1)), draw(st.integers(90, 110)), draw(st.sampled_from(["decision", "shadow"])))
                  for _ in range(draw(st.integers(0, 20)))]
     return h, bars, decisions
@@ -216,15 +218,15 @@ def test_calibration_label_comes_from_later_bar_in_same_session(case):
     for ts, p, entry, kind in decisions:
         a.record(kind, {"has_thesis": True, "detail": _det(p, entry)}, market="KR", symbol="X", ts=ts)
 
-    # 기준 구현: 결정 이후 H분 시점 이후의 첫 봉, 단 같은 날(같은 장)일 때만
+    # 기준 구현: 판단 분(초 버림)부터 H분 뒤에 마감하는 봉(없으면 그 뒤 첫 봉), 단 같은 날(같은 장)일 때만
     ordered = sorted(bars)
     pairs = []
     for ts, p, entry, _ in decisions:
-        target = ts + (h - 1) * MIN
-        nxt = next(((t, c) for t, c in ordered if t >= target), None)
+        minute = ts.replace(second=0, microsecond=0)
+        nxt = next(((t, c) for t, c in ordered if t + MIN >= minute + h * MIN), None)
         if nxt is None or nxt[0].date() != ts.date():
             continue
-        assert nxt[0] >= ts  # 결과 봉은 결정 시각 이후에 시작한다(결정 때 이미 알던 가격이 아님)
+        assert nxt[0] + MIN > ts  # 결과 가격(봉 종가)은 판단 시각 이후에 정해진다(판단 때 이미 알던 가격이 아님)
         pairs.append((p, 1 if nxt[1] > entry else 0))
 
     c = jev_calibration(a, horizon_min=h)
@@ -243,3 +245,17 @@ def test_calibration_skips_label_across_market_close():
     a.record("shadow", {"has_thesis": True, "detail": _det(0.9, 100)}, market="KR", symbol="X",
              ts=DAYS[0] + timedelta(hours=6, minutes=20))
     assert jev_calibration(a).n == 0
+
+
+@pytest.mark.parametrize("lag", [timedelta(0), timedelta(milliseconds=300), timedelta(seconds=59)])
+def test_calibration_horizon_same_for_live_and_replay_timestamps(lag):
+    """회귀: 운영 루프는 판단 시각을 '다음 분 첫 틱 시각'(10:01:00.3)으로 기록하고 리플레이는 봉 마감(10:01:00)으로
+    기록한다. 둘 다 10:00 봉 종가 대비 15분 뒤(10:15 봉, 10:16 마감) 결과여야 한다(전엔 실서버만 10:16 봉 = 16분)."""
+    a = AuditLog()
+    t0 = datetime(2026, 10, 28, 10, 0, tzinfo=KST)
+    for i in range(40):
+        c = {15: 101, 16: 99}.get(i, 100)  # 15분 뒤는 상승, 16분 뒤는 하락 → 한 칸 밀리면 라벨이 뒤집힌다
+        a.record("bar", {"start": t0 + i * MIN, "c": c}, market="KR", symbol="X", ts=t0 + (i + 1) * MIN)
+    a.record("decision", {"detail": _det(0.9, 100)}, market="KR", symbol="X", ts=t0 + MIN + lag)
+    c = jev_calibration(a)
+    assert c.n == 1 and c.brier == pytest.approx(0.01)  # y=1
