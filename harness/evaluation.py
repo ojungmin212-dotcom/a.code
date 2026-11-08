@@ -2,6 +2,7 @@
 
 - 매매 성과: 청산 손익으로 승률·손익비·최대낙폭(실현 기준)
 - Jev 보정: 결정 시점의 thesis_aligned 확률 vs 이후 H분 수익률>0 여부 → Brier 점수와 구간별 적중률
+  (결과는 결정 이후 봉에서만, 같은 거래일 안에서만 잡는다 — 장 마감을 넘기면 표본에서 뺀다)
   (기준선 = 항상 평균 적중률을 말하는 예측. skill > 0 이어야 Jev 가 정보가 있다는 뜻)
 """
 from __future__ import annotations
@@ -12,6 +13,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from harness.audit import AuditLog
+from harness.models import Market
+from harness.risk.sessions import SESSIONS
 
 
 @dataclass
@@ -79,10 +82,14 @@ def jev_calibration(audit: AuditLog, horizon_min: int = 15,
         p = float(answers["thesis_aligned"]["noul"])
         entry = float(d["state"]["indicators"]["last"])
         times, closes = bars[e["symbol"]]
-        target = datetime.fromisoformat(e["ts"]) + timedelta(minutes=horizon_min - 1)
+        ts = datetime.fromisoformat(e["ts"])
+        target = ts + timedelta(minutes=horizon_min - 1)
         i = bisect.bisect_left(times, target)
         if i >= len(times):
             continue  # 아직 결과를 모름
+        day = SESSIONS[Market(e["market"])].trading_date
+        if day(times[i]) != day(ts):
+            continue  # 당일 장 안에 결과 봉이 없음 → 다음 날 가격(밤사이 갭)을 H분 결과로 쓰지 않는다
         pairs.append((p, 1 if closes[i] > entry else 0))
 
     if not pairs:
