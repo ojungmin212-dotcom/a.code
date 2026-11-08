@@ -2,7 +2,8 @@
 
 - 매매 성과: 청산 손익으로 승률·손익비·최대낙폭(실현 기준)
 - Jev 보정: 결정 시점의 thesis_aligned 확률 vs 이후 H분 수익률>0 여부 → Brier 점수와 구간별 적중률
-  (결과는 결정 이후 봉에서만, 같은 거래일 안에서만 잡는다 — 장 마감을 넘기면 표본에서 뺀다)
+  (H분은 판단 시각을 분 단위로 내린 시각부터 잰다. 결과는 결정 이후 봉에서만, 같은 거래일 안에서만 잡는다
+   — 장 마감을 넘기면 표본에서 뺀다)
   (기준선 = 항상 평균 적중률을 말하는 예측. skill > 0 이어야 Jev 가 정보가 있다는 뜻)
 """
 from __future__ import annotations
@@ -82,7 +83,9 @@ def jev_calibration(audit: AuditLog, horizon_min: int = 15,
         p = float(answers["thesis_aligned"]["noul"])
         entry = float(d["state"]["indicators"]["last"])
         times, closes = bars[e["symbol"]]
-        ts = datetime.fromisoformat(e["ts"])
+        # 운영 루프는 '다음 분 첫 틱 시각'(10:01:00.3)을, 리플레이는 봉 마감 시각(10:01:00)을 판단 시각으로 남긴다.
+        # 분 단위로 내려 맞춰야 둘 다 H분 결과가 된다(안 내리면 실서버만 H+1분 뒤 봉을 라벨로 씀).
+        ts = datetime.fromisoformat(e["ts"]).replace(second=0, microsecond=0)
         target = ts + timedelta(minutes=horizon_min - 1)
         i = bisect.bisect_left(times, target)
         if i >= len(times):
